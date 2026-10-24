@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Majani Mingi Sisal Estate - Invoice Tracking System</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                            800: '#166534',
+                            900: '#14532d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-slate-50 font-sans text-slate-900 antialiased flex flex-col">
+
+    <!-- App Root Container -->
+    <div id="app" class="min-h-full flex flex-col">
+        <!-- Rendered dynamically by JS -->
+    </div>
+
+    <!-- Custom Modal Container -->
+    <div id="modal-container"></div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <!-- Firebase SDK Modular Scripts -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            signInWithCustomToken, 
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            getDoc, 
+            setDoc, 
+            updateDoc, 
+            collection, 
+            onSnapshot 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // APP CONSTANTS & DEFAULTS
+        const DEFAULT_USERS = [
+            { id: 'alimah', username: 'Alimah', role: 'Main Store', pin: 'store123', avatar: '🌱', description: 'Receives and enters new invoices' },
+            { id: 'sharon', username: 'Sharon', role: 'Procurement', pin: 'sharon123', avatar: '📋', description: 'Confirms invoices from Stores' },
+            { id: 'lilian', username: 'Lilian', role: 'Billing', pin: 'lilian123', avatar: '💳', description: 'Processes and bills confirmed invoices' },
+            { id: 'vivian', username: 'Vivian', role: 'Filing', pin: 'vivian123', avatar: '📁', description: 'Receives and completes filing process' },
+            { id: 'admin', username: 'Admin', role: 'Admin', pin: 'admin123', avatar: '👑', description: 'System Administrator & Supervisor' }
+        ];
+
+        const DEFAULT_SUPPLIERS = [
+            'Greenfields Farm Inputs Ltd',
+            'Sisal Machinery & Parts Co.',
+            'Rift Valley Logistics',
+            'Nakuru General Hardware',
+            'Agro-Chem Supplies Kenya',
+            'Kipkelion Fuel & Oils'
+        ];
+
+        const STAGES = {
+            STORE: 'Main Store (Alimah)',
+            PROCUREMENT: 'Procurement (Sharon)',
+            BILLING: 'Billing (Lilian)',
+            FILING: 'Filing (Vivian)',
+            COMPLETED: 'Completed'
+        };
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'majani-mingi-sisal';
+        
+        let firebaseConfig = {
+            apiKey: "demo-api-key",
+            authDomain: "demo-app.firebaseapp.com",
+            projectId: "demo-app",
+            storageBucket: "demo-app.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:demo"
+        };
+
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try {
+                firebaseConfig = JSON.parse(__firebase_config);
+            } catch(e) { console.warn("Using default demo firebase config"); }
+        }
+
+        // Initialize Firebase
+        let app, db, auth;
+        let isFirebaseActive = false;
+        let firebaseStatus = 'Connecting...';
+
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+            if (token) {
+                await signInWithCustomToken(auth, token);
+            } else {
+                await signInAnonymously(auth);
+            }
+
+            isFirebaseActive = true;
+            firebaseStatus = 'Live Sync Active';
+        } catch (err) {
+            console.warn("Firebase fallback mode:", err);
+            isFirebaseActive = false;
+            firebaseStatus = 'Offline (Local Backup Mode)';
+        }
+
+        // --- GLOBAL APP STATE ---
+        window.appState = {
+            currentUser: JSON.parse(localStorage.getItem('majani_current_user')) || null,
+            activeTab: 'dashboard',
+            invoices: [],
+            suppliers: DEFAULT_SUPPLIERS,
+            users: DEFAULT_USERS,
+            firebaseStatus: firebaseStatus,
+            isFirebaseActive: isFirebaseActive,
+            db: db,
+            appId: appId
+        };
+
+        // Local Storage Helpers
+        function getLocalStorage(key, fallback) {
+            const d = localStorage.getItem(`majani_${key}`);
+            return d ? JSON.parse(d) : fallback;
+        }
+
+        function setLocalStorage(key, val) {
+            localStorage.setItem(`majani_${key}`, JSON.stringify(val));
+        }
+
+        // Initial Local Fallbacks
+        if (!localStorage.getItem('majani_users')) setLocalStorage('users', DEFAULT_USERS);
+        if (!localStorage.getItem('majani_suppliers')) setLocalStorage('suppliers', DEFAULT_SUPPLIERS);
+        if (!localStorage.getItem('majani_invoices')) {
+            const initialInvoices = [
+                {
+                    id: 'INV-2026-001',
+                    invoiceNumber: 'MM-9942',
+                    supplierName: 'Greenfields Farm Inputs Ltd',
+                    amount: '145,000 KES',
+                    description: 'Fertilizer batch Q1',
+                    currentStage: STAGES.PROCUREMENT,
+                    history: [
+                        { stage: STAGES.STORE, user: 'Alimah', timestamp: '22 Oct 2026 08:30 AM', action: 'Added & Submitted' }
+                    ]
+                },
+                {
+                    id: 'INV-2026-002',
+                    invoiceNumber: 'MM-9943',
+                    supplierName: 'Sisal Machinery & Parts Co.',
+                    amount: '320,000 KES',
+                    description: 'Decorticator spare blades',
+                    currentStage: STAGES.BILLING,
+                    history: [
+                        { stage: STAGES.STORE, user: 'Alimah', timestamp: '22 Oct 2026 09:15 AM', action: 'Added & Submitted' },
+                        { stage: STAGES.PROCUREMENT, user: 'Sharon', timestamp: '22 Oct 2026 11:00 AM', action: 'Confirmed & Submitted' }
+                    ]
+                }
+            ];
+            setLocalStorage('invoices', initialInvoices);
+        }
+
+        // Load Local initial values
+        window.appState.users = getLocalStorage('users', DEFAULT_USERS);
+        window.appState.suppliers = getLocalStorage('suppliers', DEFAULT_SUPPLIERS);
+        window.appState.invoices = getLocalStorage('invoices', []);
+
+        // --- FIREBASE REALTIME LISTENERS ---
+        if (isFirebaseActive && db) {
+            const invoicesRef = collection(db, 'artifacts', appId, 'public', 'data', 'invoices');
+            const suppliersRef = collection(db, 'artifacts', appId, 'public', 'data', 'suppliers');
+            const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+
+            // Listen for Invoices
+            onSnapshot(invoicesRef, (snapshot) => {
+                let items = [];
+                snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+                if (items.length > 0) {
+                    window.appState.invoices = items;
+                    setLocalStorage('invoices', items);
+                    window.render();
+                } else {
+                    // Seed initial if empty
+                    window.appState.invoices.forEach(inv => {
+                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', inv.id), inv);
+                    });
+                }
+            }, (error) => {
+                console.error("Firestore Invoices Error:", error);
+            });
+
+            // Listen for Suppliers
+            onSnapshot(suppliersRef, (snapshot) => {
+                let sups = [];
+                snapshot.forEach(doc => sups.push(doc.data().name));
+                if (sups.length > 0) {
+                    window.appState.suppliers = sups;
+                    setLocalStorage('suppliers', sups);
+                    window.render();
+                } else {
+                    DEFAULT_SUPPLIERS.forEach((s, idx) => {
+                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'suppliers', `SUP-${idx}`), { name: s });
+                    });
+                }
+            }, (error) => {
+                console.error("Firestore Suppliers Error:", error);
+            });
+
+            // Listen for Users / Passwords
+            onSnapshot(usersRef, (snapshot) => {
+                let uList = [];
+                snapshot.forEach(doc => uList.push(doc.data()));
+                if (uList.length > 0) {
+                    window.appState.users = uList;
+                    setLocalStorage('users', uList);
+
+                    // Update current logged-in user reference if pin changed
+                    if (window.appState.currentUser) {
+                        const updated = uList.find(u => u.username === window.appState.currentUser.username);
+                        if (updated) {
+                            window.appState.currentUser = updated;
+                            setLocalStorage('current_user', updated);
+                        }
+                    }
+                    window.render();
+                } else {
+                    DEFAULT_USERS.forEach(u => {
+                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.id), u);
+                    });
+                }
+            }, (error) => {
+                console.error("Firestore Users Error:", error);
+            });
+        }
+
+        // SYNC STATE TO FIREBASE OR LOCAL
+        window.saveInvoiceToCloud = async function(invoice) {
+            if (isFirebaseActive && db) {
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', invoice.id), invoice);
+                } catch(e) { console.error("Error saving invoice:", e); }
+            } else {
+                let invoices = window.appState.invoices;
+                const idx = invoices.findIndex(i => i.id === invoice.id);
+                if (idx >= 0) invoices[idx] = invoice;
+                else invoices.push(invoice);
+                setLocalStorage('invoices', invoices);
+                window.render();
+            }
+        };
+
+        window.saveSupplierToCloud = async function(supplierName) {
+            if (isFirebaseActive && db) {
+                try {
+                    const supId = 'SUP-' + Date.now();
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'suppliers', supId), { name: supplierName });
+                } catch(e) { console.error("Error saving supplier:", e); }
+            } else {
+                let sups = window.appState.suppliers;
+                if (!sups.includes(supplierName)) {
+                    sups.push(supplierName);
+                    setLocalStorage('suppliers', sups);
+                    window.render();
+                }
+            }
+        };
+
+        window.updateUserPinInCloud = async function(userId, newPin) {
+            let uList = window.appState.users;
+            const targetUser = uList.find(u => u.id === userId || u.username === userId);
+            if (!targetUser) return;
+
+            targetUser.pin = newPin;
+
+            if (isFirebaseActive && db) {
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', targetUser.id), targetUser);
+                } catch(e) { console.error("Error updating password:", e); }
+            } else {
+                setLocalStorage('users', uList);
+                window.render();
+            }
+        };
+
+        // --- UI UTILITY FUNCTIONS ---
+        window.showToast = function(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgColor = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-rose-600' : 'bg-amber-600';
+            toast.className = `${bgColor} text-white px-4 py-3 rounded-xl shadow-lg flex items-center space-x-3 pointer-events-auto transform transition-all duration-300 translate-y-2 opacity-0 text-sm font-medium z-50`;
+            
+            let icon = 'fa-circle-check';
+            if (type === 'error') icon = 'fa-circle-exclamation';
+            if (type === 'warning') icon = 'fa-triangle-exclamation';
+
+            toast.innerHTML = `<i class="fa-solid ${icon} text-lg"></i><span>${message}</span>`;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            }, 10);
+
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        };
+
+        window.showConfirmationModal = function(title, message, onConfirm) {
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
+                        <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-4">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 mb-2">${title}</h3>
+                        <p class="text-slate-600 text-sm mb-6 leading-relaxed">${message}</p>
+                        <div class="flex space-x-3 justify-end">
+                            <button id="modal-cancel" class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
+                            <button id="modal-confirm" class="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 shadow-lg shadow-emerald-600/20 transition">Confirm & Proceed</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('modal-cancel').onclick = () => {
+                modalContainer.innerHTML = '';
+            };
+
+            document.getElementById('modal-confirm').onclick = () => {
+                modalContainer.innerHTML = '';
+                onConfirm();
+            };
+        };
+
+        function getCurrentTimestamp() {
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+            const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            return `${dateStr} ${timeStr}`;
+        }
+
+        // --- RENDER APP ---
+        window.render = function() {
+            const app = document.getElementById('app');
+            if (!window.appState.currentUser) {
+                app.innerHTML = renderLoginScreen();
+                bindLoginEvents();
+            } else {
+                app.innerHTML = renderMainLayout();
+                bindMainLayoutEvents();
+            }
+        };
+
+        // LOGIN SCREEN
+        function renderLoginScreen() {
+            const users = window.appState.users;
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-emerald-900 via-emerald-800 to-slate-900 flex flex-col justify-center items-center p-4">
+                    <div class="max-w-md w-full bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-white/20">
+                        <div class="text-center mb-6">
+                            <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-600 text-white text-2xl shadow-lg shadow-emerald-600/30 mb-4">
+                                <i class="fa-solid fa-file-invoice-dollar"></i>
+                            </div>
+                            <h1 class="text-2xl font-bold text-slate-900">Majani Mingi Sisal Estate</h1>
+                            <p class="text-slate-500 text-sm mt-1">Invoice Tracking System</p>
+                            
+                            <!-- Realtime Status Indicator -->
+                            <div class="mt-3 inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700">
+                                <span class="w-2.5 h-2.5 rounded-full ${window.appState.isFirebaseActive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}"></span>
+                                <span>${window.appState.firebaseStatus}</span>
+                            </div>
+                        </div>
+
+                        <form id="login-form" class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Select User Account</label>
+                                <select id="login-user" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                    <option value="" disabled selected>-- Choose your account --</option>
+                                    ${users.map(u => `<option value="${u.username}">${u.username} (${u.role})</option>`).join('')}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Password / PIN</label>
+                                <input type="password" id="login-pin" placeholder="Enter password" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <button type="submit" class="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/30 transition duration-200 mt-2">
+                                Sign In <i class="fa-solid fa-arrow-right ml-2"></i>
+                            </button>
+                        </form>
+
+                        <div class="mt-8 pt-6 border-t border-slate-100">
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider text-center mb-3">Quick Login (Click User)</p>
+                            <div class="grid grid-cols-2 gap-2">
+                                ${users.map(u => `
+                                    <button type="button" onclick="fillDemo('${u.username}', '${u.pin}')" class="text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/50 transition group">
+                                        <div class="text-xs font-bold text-slate-800 group-hover:text-emerald-700">${u.username}</div>
+                                        <div class="text-[10px] text-slate-500 truncate">${u.role}</div>
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-center mt-6 text-emerald-200/60 text-xs">
+                        &copy; 2026 Majani Mingi Sisal Estate Ltd. Live Multi-User Sync.
+                    </div>
+                </div>
+            `;
+        }
+
+        window.fillDemo = function(username, pin) {
+            document.getElementById('login-user').value = username;
+            document.getElementById('login-pin').value = pin;
+        };
+
+        function bindLoginEvents() {
+            document.getElementById('login-form').onsubmit = (e) => {
+                e.preventDefault();
+                const username = document.getElementById('login-user').value;
+                const pin = document.getElementById('login-pin').value;
+
+                if (!username || !pin) {
+                    window.showToast('Please select a user and enter your password.', 'error');
+                    return;
+                }
+
+                const userObj = window.appState.users.find(u => u.username === username);
+                if (userObj && userObj.pin === pin) {
+                    window.appState.currentUser = userObj;
+                    setLocalStorage('current_user', userObj);
+                    window.appState.activeTab = 'dashboard';
+                    window.showToast(`Welcome back, ${userObj.username}!`);
+                    window.render();
+                } else {
+                    window.showToast('Invalid password. Please try again.', 'error');
+                }
+            };
+        }
+
+        // MAIN LAYOUT
+        function renderMainLayout() {
+            const user = window.appState.currentUser;
+            const invoices = window.appState.invoices;
+            const suppliers = window.appState.suppliers;
+            const activeTab = window.appState.activeTab;
+
+            // Compute counts
+            let pendingCount = 0;
+            if (user.role === 'Main Store') pendingCount = invoices.filter(i => i.currentStage === STAGES.STORE).length;
+            else if (user.role === 'Procurement') pendingCount = invoices.filter(i => i.currentStage === STAGES.PROCUREMENT).length;
+            else if (user.role === 'Billing') pendingCount = invoices.filter(i => i.currentStage === STAGES.BILLING).length;
+            else if (user.role === 'Filing') pendingCount = invoices.filter(i => i.currentStage === STAGES.FILING).length;
+            else if (user.role === 'Admin') pendingCount = invoices.filter(i => i.currentStage !== STAGES.COMPLETED).length;
+
+            const completedCount = invoices.filter(i => i.currentStage === STAGES.COMPLETED).length;
+
+            return `
+                <div class="min-h-full flex flex-col md:flex-row bg-slate-100 flex-1">
+                    <!-- Sidebar -->
+                    <aside class="w-full md:w-72 bg-slate-900 text-slate-300 flex flex-col justify-between border-r border-slate-800">
+                        <div>
+                            <!-- Brand Header -->
+                            <div class="p-6 border-b border-slate-800 flex items-center space-x-3">
+                                <div class="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-lg shadow-md shadow-emerald-600/30">
+                                    <i class="fa-solid fa-seedling"></i>
+                                </div>
+                                <div>
+                                    <h2 class="font-bold text-white text-sm leading-tight">Majani Mingi</h2>
+                                    <p class="text-xs text-slate-400">Sisal Estate Ltd</p>
+                                </div>
+                            </div>
+
+                            <!-- Realtime Status Banner -->
+                            <div class="px-4 py-2 bg-slate-800/50 border-b border-slate-800 flex items-center justify-between text-[11px]">
+                                <span class="text-slate-400">Sync Status:</span>
+                                <span class="font-semibold flex items-center space-x-1.5 ${window.appState.isFirebaseActive ? 'text-emerald-400' : 'text-amber-400'}">
+                                    <span class="w-2 h-2 rounded-full ${window.appState.isFirebaseActive ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}"></span>
+                                    <span>${window.appState.isFirebaseActive ? 'Live Sync' : 'Local'}</span>
+                                </span>
+                            </div>
+
+                            <!-- User Info Badge -->
+                            <div class="p-4 m-4 bg-slate-800/80 rounded-2xl border border-slate-700/60 flex items-center space-x-3">
+                                <div class="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg font-bold border border-emerald-500/30">
+                                    ${user.avatar}
+                                </div>
+                                <div class="overflow-hidden">
+                                    <h4 class="font-bold text-white text-sm truncate">${user.username}</h4>
+                                    <span class="inline-block px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-semibold tracking-wide uppercase">${user.role}</span>
+                                </div>
+                            </div>
+
+                            <!-- Navigation Menu -->
+                            <nav class="px-4 space-y-1.5 mt-2">
+                                <button onclick="switchTab('dashboard')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'dashboard' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                    <span class="flex items-center space-x-3"><i class="fa-solid fa-chart-pie w-5"></i><span>Dashboard & Queue</span></span>
+                                    ${pendingCount > 0 ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold ${activeTab === 'dashboard' ? 'bg-white text-emerald-700' : 'bg-emerald-500/20 text-emerald-400'}">${pendingCount}</span>` : ''}
+                                </button>
+
+                                ${(user.role === 'Main Store' || user.role === 'Admin') ? `
+                                    <button onclick="switchTab('add')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'add' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                        <i class="fa-solid fa-plus-circle w-5"></i><span>Add New Invoice</span>
+                                    </button>
+                                ` : ''}
+
+                                <button onclick="switchTab('completed')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'completed' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                    <span class="flex items-center space-x-3"><i class="fa-solid fa-box-archive w-5"></i><span>Completed Invoices</span></span>
+                                    <span class="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300">${completedCount}</span>
+                                </button>
+
+                                <button onclick="switchTab('suppliers')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'suppliers' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                    <span class="flex items-center space-x-3"><i class="fa-solid fa-truck-field w-5"></i><span>Suppliers Directory</span></span>
+                                    <span class="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-300">${suppliers.length}</span>
+                                </button>
+
+                                <button onclick="switchTab('users')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'users' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                    <span class="flex items-center space-x-3"><i class="fa-solid fa-users-gear w-5"></i><span>User & Passwords</span></span>
+                                    ${user.role === 'Admin' ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">Admin</span>' : ''}
+                                </button>
+                            </nav>
+                        </div>
+
+                        <!-- Sidebar Footer -->
+                        <div class="p-4 border-t border-slate-800">
+                            <button onclick="logout()" class="w-full flex items-center justify-center space-x-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-rose-600/20 hover:text-rose-400 text-slate-300 font-semibold text-sm transition duration-200">
+                                <i class="fa-solid fa-right-from-bracket"></i><span>Sign Out</span>
+                            </button>
+                        </div>
+                    </aside>
+
+                    <!-- Main Content -->
+                    <main class="flex-1 flex flex-col min-w-0 overflow-y-auto">
+                        <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-20">
+                            <div>
+                                <h1 class="text-xl font-bold text-slate-900 capitalize">${activeTab.replace('-', ' ')}</h1>
+                                <p class="text-xs text-slate-500">Majani Mingi Sisal Estate Ltd &bull; Realtime Internal Portal</p>
+                            </div>
+                            <div class="flex items-center space-x-4">
+                                <div class="hidden sm:flex flex-col text-right">
+                                    <span class="text-xs font-bold text-slate-800">${user.username}</span>
+                                    <span class="text-[10px] text-emerald-600 font-semibold">${user.role}</span>
+                                </div>
+                                <div class="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center text-sm">
+                                    ${user.avatar}
+                                </div>
+                            </div>
+                        </header>
+
+                        <div class="p-6 flex-1">
+                            ${renderTabContent()}
+                        </div>
+                    </main>
+                </div>
+            `;
+        }
+
+        window.switchTab = function(tab) {
+            window.appState.activeTab = tab;
+            window.render();
+        };
+
+        window.logout = function() {
+            window.appState.currentUser = null;
+            localStorage.removeItem('majani_current_user');
+            window.render();
+        };
+
+        // --- TAB CONTENT SWITCHER ---
+        function renderTabContent() {
+            switch (window.appState.activeTab) {
+                case 'dashboard': return renderDashboardTab();
+                case 'add': return renderAddInvoiceTab();
+                case 'completed': return renderCompletedTab();
+                case 'suppliers': return renderSuppliersTab();
+                case 'users': return renderUsersManagementTab();
+                default: return '<div class="text-slate-500">Tab not found</div>';
+            }
+        }
+
+        // 1. DASHBOARD TAB
+        function renderDashboardTab() {
+            const user = window.appState.currentUser;
+            const invoices = window.appState.invoices;
+
+            let filteredInvoices = [];
+            let queueTitle = '';
+            let queueSubtitle = '';
+
+            if (user.role === 'Main Store') {
+                filteredInvoices = invoices.filter(i => i.currentStage === STAGES.STORE);
+                queueTitle = "Main Store Action Queue";
+                queueSubtitle = "Invoices awaiting initial registration & submission to Procurement";
+            } else if (user.role === 'Procurement') {
+                filteredInvoices = invoices.filter(i => i.currentStage === STAGES.PROCUREMENT);
+                queueTitle = "Procurement Action Queue (Sharon)";
+                queueSubtitle = "Invoices awaiting confirmation before forwarding to Billing";
+            } else if (user.role === 'Billing') {
+                filteredInvoices = invoices.filter(i => i.currentStage === STAGES.BILLING);
+                queueTitle = "Billing Action Queue (Lilian)";
+                queueSubtitle = "Invoices awaiting billing and submission to Filing";
+            } else if (user.role === 'Filing') {
+                filteredInvoices = invoices.filter(i => i.currentStage === STAGES.FILING);
+                queueTitle = "Filing Action Queue (Vivian)";
+                queueSubtitle = "Invoices awaiting final confirmation, receipt and completion";
+            } else if (user.role === 'Admin') {
+                filteredInvoices = invoices.filter(i => i.currentStage !== STAGES.COMPLETED);
+                queueTitle = "Active System Workflows (Admin View)";
+                queueSubtitle = "All in-progress invoices across all departments";
+            }
+
+            const totalActive = invoices.filter(i => i.currentStage !== STAGES.COMPLETED).length;
+            const totalCompleted = invoices.filter(i => i.currentStage === STAGES.COMPLETED).length;
+
+            return `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl font-bold">
+                                <i class="fa-solid fa-file-waveform"></i>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-slate-900">${totalActive}</div>
+                                <div class="text-xs text-slate-500 font-medium">In-Progress Invoices</div>
+                            </div>
+                        </div>
+                        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div class="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl font-bold">
+                                <i class="fa-solid fa-circle-check"></i>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-slate-900">${totalCompleted}</div>
+                                <div class="text-xs text-slate-500 font-medium">Completed & Filed</div>
+                            </div>
+                        </div>
+                        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
+                            <div class="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center text-xl font-bold">
+                                <i class="fa-solid fa-user-shield"></i>
+                            </div>
+                            <div>
+                                <div class="text-sm font-bold text-slate-900 truncate">${user.username}</div>
+                                <div class="text-xs text-emerald-600 font-medium">${user.role}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div class="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-base">${queueTitle}</h3>
+                                <p class="text-xs text-slate-500 mt-0.5">${queueSubtitle}</p>
+                            </div>
+                            ${user.role === 'Main Store' ? `
+                                <button onclick="switchTab('add')" class="inline-flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-md transition">
+                                    <i class="fa-solid fa-plus"></i><span>New Invoice</span>
+                                </button>
+                            ` : ''}
+                        </div>
+
+                        ${filteredInvoices.length === 0 ? `
+                            <div class="p-12 text-center">
+                                <div class="w-16 h-16 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center text-2xl mx-auto mb-3">
+                                    <i class="fa-solid fa-folder-open"></i>
+                                </div>
+                                <h4 class="font-bold text-slate-700 text-sm">No Invoices in Queue</h4>
+                                <p class="text-slate-400 text-xs mt-1">Everything is up to date at this stage.</p>
+                            </div>
+                        ` : `
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr class="bg-slate-50/70 border-b border-slate-200 text-slate-600 text-xs uppercase tracking-wider font-semibold">
+                                            <th class="p-4">Invoice #</th>
+                                            <th class="p-4">Supplier</th>
+                                            <th class="p-4">Amount / Desc</th>
+                                            <th class="p-4">Current Stage</th>
+                                            <th class="p-4">History & Timestamps</th>
+                                            <th class="p-4 text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100 text-sm">
+                                        ${filteredInvoices.map(inv => `
+                                            <tr class="hover:bg-slate-50/50 transition">
+                                                <td class="p-4 font-bold text-slate-800">${inv.invoiceNumber}</td>
+                                                <td class="p-4 font-medium text-slate-700">${inv.supplierName}</td>
+                                                <td class="p-4">
+                                                    <div class="font-semibold text-slate-800">${inv.amount || 'N/A'}</div>
+                                                    <div class="text-xs text-slate-400 truncate max-w-xs">${inv.description || 'No description'}</div>
+                                                </td>
+                                                <td class="p-4">
+                                                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getStageBadgeClass(inv.currentStage)}">
+                                                        ${inv.currentStage}
+                                                    </span>
+                                                </td>
+                                                <td class="p-4">
+                                                    <div class="space-y-1">
+                                                        ${inv.history.map(h => `
+                                                            <div class="text-[11px] text-slate-500 flex items-center space-x-1">
+                                                                <i class="fa-solid fa-check text-emerald-600 text-[10px]"></i>
+                                                                <span class="font-semibold text-slate-700">${h.user}</span>: <span>${h.action}</span>
+                                                                <span class="text-slate-400">(${h.timestamp})</span>
+                                                            </div>
+                                                        `).join('')}
+                                                    </div>
+                                                </td>
+                                                <td class="p-4 text-right space-x-2">
+                                                    ${getRoleActionButtons(inv)}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function getStageBadgeClass(stage) {
+            switch(stage) {
+                case STAGES.STORE: return 'bg-amber-100 text-amber-800 border border-amber-200';
+                case STAGES.PROCUREMENT: return 'bg-blue-100 text-blue-800 border border-blue-200';
+                case STAGES.BILLING: return 'bg-purple-100 text-purple-800 border border-purple-200';
+                case STAGES.FILING: return 'bg-indigo-100 text-indigo-800 border border-indigo-200';
+                case STAGES.COMPLETED: return 'bg-emerald-100 text-emerald-800 border border-emerald-200';
+                default: return 'bg-slate-100 text-slate-800';
+            }
+        }
+
+        function getRoleActionButtons(inv) {
+            const user = window.appState.currentUser;
+            let buttons = '';
+
+            const canAction = (
+                (user.role === 'Main Store' && inv.currentStage === STAGES.STORE) ||
+                (user.role === 'Procurement' && inv.currentStage === STAGES.PROCUREMENT) ||
+                (user.role === 'Billing' && inv.currentStage === STAGES.BILLING) ||
+                (user.role === 'Filing' && inv.currentStage === STAGES.FILING) ||
+                (user.role === 'Admin')
+            );
+
+            if (canAction) {
+                buttons += `
+                    <button onclick="forwardInvoice('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5">
+                        <span>Submit</span><i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                `;
+            }
+
+            if (user.role === 'Admin' && inv.currentStage !== STAGES.STORE) {
+                buttons += `
+                    <button onclick="returnInvoice('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5" title="Return to previous stage">
+                        <i class="fa-solid fa-arrow-rotate-left"></i><span>Return</span>
+                    </button>
+                `;
+            }
+
+            return buttons;
+        }
+
+        // 2. ADD INVOICE TAB
+        function renderAddInvoiceTab() {
+            return `
+                <div class="max-w-2xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
+                    <div class="flex items-center space-x-3 mb-6 pb-4 border-b border-slate-100">
+                        <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-lg font-bold">
+                            <i class="fa-solid fa-file-circle-plus"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-base">Add New Received Invoice</h3>
+                            <p class="text-xs text-slate-500">Main Store (Alimah) &bull; Enter invoice details received at store</p>
+                        </div>
+                    </div>
+
+                    <form id="add-invoice-form" class="space-y-5">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Invoice Number *</label>
+                                <input type="text" id="inv-number" required placeholder="e.g. MM-9950" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Date Received *</label>
+                                <input type="date" id="inv-date" required value="${new Date().toISOString().split('T')[0]}" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                        </div>
+
+                        <div class="relative">
+                            <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Supplier Name * (Auto-lookup & New Registration)</label>
+                            <input type="text" id="inv-supplier" required autocomplete="off" placeholder="Start typing supplier name..." class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            <div id="supplier-suggestions" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl hidden z-30 max-h-48 overflow-y-auto"></div>
+                            <p class="text-[11px] text-slate-400 mt-1">If supplier does not exist, typing a new name will automatically add them to live global database upon submission.</p>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Amount (Optional)</label>
+                                <input type="text" id="inv-amount" placeholder="e.g. 50,000 KES" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Description / Items</label>
+                                <input type="text" id="inv-desc" placeholder="Brief description of goods" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                        </div>
+
+                        <div class="pt-4 border-t border-slate-100 flex justify-end space-x-3">
+                            <button type="button" onclick="switchTab('dashboard')" class="px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
+                            <button type="submit" class="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20 transition">
+                                <i class="fa-solid fa-paper-plane mr-2"></i>Save & Submit to Procurement
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        // 3. COMPLETED TAB
+        function renderCompletedTab() {
+            const invoices = window.appState.invoices;
+            const completed = invoices.filter(i => i.currentStage === STAGES.COMPLETED);
+
+            return `
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-base">Completed Invoices Archive</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Fully processed, filed and verified invoices (Read-only for all users)</p>
+                        </div>
+                        <div class="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                            ${completed.length} Completed
+                        </div>
+                    </div>
+
+                    ${completed.length === 0 ? `
+                        <div class="p-12 text-center">
+                            <div class="w-16 h-16 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center text-2xl mx-auto mb-3">
+                                <i class="fa-solid fa-box-archive"></i>
+                            </div>
+                            <h4 class="font-bold text-slate-700 text-sm">No Completed Invoices Yet</h4>
+                            <p class="text-slate-400 text-xs mt-1">Invoices that complete all 4 workflow steps will appear here.</p>
+                        </div>
+                    ` : `
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-slate-50/70 border-b border-slate-200 text-slate-600 text-xs uppercase tracking-wider font-semibold">
+                                        <th class="p-4">Invoice #</th>
+                                        <th class="p-4">Supplier Name</th>
+                                        <th class="p-4">Amount / Description</th>
+                                        <th class="p-4">Full Workflow Audit Timeline</th>
+                                        <th class="p-4 text-right">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 text-sm">
+                                    ${completed.map(inv => `
+                                        <tr class="hover:bg-slate-50/50 transition">
+                                            <td class="p-4 font-bold text-slate-800">${inv.invoiceNumber}</td>
+                                            <td class="p-4 font-medium text-slate-700">${inv.supplierName}</td>
+                                            <td class="p-4">
+                                                <div class="font-semibold text-slate-800">${inv.amount || 'N/A'}</div>
+                                                <div class="text-xs text-slate-400">${inv.description || 'N/A'}</div>
+                                            </td>
+                                            <td class="p-4">
+                                                <div class="space-y-1">
+                                                    ${inv.history.map(h => `
+                                                        <div class="text-[11px] text-slate-600 flex items-center space-x-1.5">
+                                                            <i class="fa-solid fa-circle-check text-emerald-600 text-[10px]"></i>
+                                                            <span class="font-semibold">${h.user} (${h.stage}):</span> <span>${h.action}</span>
+                                                            <span class="text-slate-400 text-[10px]">(${h.timestamp})</span>
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </td>
+                                            <td class="p-4 text-right">
+                                                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                    <i class="fa-solid fa-check mr-1.5"></i>Completed & Filed
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        // 4. SUPPLIERS TAB
+        function renderSuppliersTab() {
+            const suppliers = window.appState.suppliers;
+            const user = window.appState.currentUser;
+            const isAdmin = user.role === 'Admin';
+
+            return `
+                <div class="space-y-6 max-w-4xl mx-auto">
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-base">Suppliers Database</h3>
+                                <p class="text-xs text-slate-500 mt-0.5">Live database updated automatically when store enters new invoices. Admin can edit/correct.</p>
+                            </div>
+                            <div class="px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-bold border border-blue-200">
+                                ${suppliers.length} Approved Suppliers
+                            </div>
+                        </div>
+
+                        <div class="p-6">
+                            ${isAdmin ? `
+                                <div class="mb-6 p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row gap-3">
+                                    <input type="text" id="new-supplier-input" placeholder="Add new supplier manually..." class="flex-1 px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                    <button onclick="addNewSupplierManually()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl shadow-md transition">
+                                        <i class="fa-solid fa-plus mr-1.5"></i>Add Supplier
+                                    </button>
+                                </div>
+                            ` : ''}
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                ${suppliers.map((sup, idx) => `
+                                    <div class="p-4 rounded-xl border border-slate-200 bg-white flex items-center justify-between shadow-xs hover:border-emerald-500 transition">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm">
+                                                <i class="fa-solid fa-truck"></i>
+                                            </div>
+                                            <div>
+                                                <h4 class="font-bold text-slate-800 text-sm">${sup}</h4>
+                                                <span class="text-[10px] text-slate-400">Majani Mingi Registered Supplier</span>
+                                            </div>
+                                        </div>
+                                        ${isAdmin ? `
+                                            <div class="flex space-x-1">
+                                                <button onclick="editSupplier(${idx})" class="p-2 text-slate-400 hover:text-emerald-600 rounded-lg hover:bg-emerald-50 transition" title="Edit Supplier Name">
+                                                    <i class="fa-solid fa-pen"></i>
+                                                </button>
+                                                <button onclick="deleteSupplier(${idx})" class="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition" title="Delete Supplier">
+                                                    <i class="fa-solid fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 5. USER & PASSWORD MANAGEMENT TAB
+        function renderUsersManagementTab() {
+            const users = window.appState.users;
+            const currentUser = window.appState.currentUser;
+            const isAdmin = currentUser.role === 'Admin';
+
+            return `
+                <div class="max-w-4xl mx-auto space-y-6">
+                    <!-- Change Own Password Card -->
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                        <div class="flex items-center space-x-3 mb-4 pb-3 border-b border-slate-100">
+                            <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-lg font-bold">
+                                <i class="fa-solid fa-key"></i>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-900 text-base">Change My Password</h3>
+                                <p class="text-xs text-slate-500">Update your account login password</p>
+                            </div>
+                        </div>
+
+                        <form id="change-own-pass-form" class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">New Password</label>
+                                <input type="password" id="my-new-pass" required placeholder="Enter new password" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Confirm Password</label>
+                                <input type="password" id="my-confirm-pass" required placeholder="Confirm password" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <button type="submit" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-md transition">
+                                Update Password
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Admin User Management Panel -->
+                    ${isAdmin ? `
+                        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+                                <div>
+                                    <h3 class="font-bold text-slate-900 text-base">Admin User & Password Management</h3>
+                                    <p class="text-xs text-slate-500 mt-0.5">As Admin, you can reset or change passwords for any user in the system.</p>
+                                </div>
+                                <span class="px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-bold border border-amber-200">
+                                    Admin Level Access
+                                </span>
+                            </div>
+
+                            <div class="divide-y divide-slate-100">
+                                ${users.map(u => `
+                                    <div class="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50/50 transition">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-lg border">
+                                                ${u.avatar}
+                                            </div>
+                                            <div>
+                                                <h4 class="font-bold text-slate-800 text-sm">${u.username} <span class="text-xs font-normal text-slate-500">(${u.role})</span></h4>
+                                                <p class="text-xs text-slate-400">Current Password: <span class="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-semibold">${u.pin}</span></p>
+                                            </div>
+                                        </div>
+
+                                        <button onclick="adminResetPassword('${u.id}', '${u.username}')" class="px-4 py-2 bg-slate-900 hover:bg-emerald-600 text-white text-xs font-semibold rounded-xl transition shadow-sm inline-flex items-center space-x-1.5">
+                                            <i class="fa-solid fa-arrows-rotate"></i><span>Reset Password</span>
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="p-6 bg-slate-100 rounded-2xl border border-slate-200 text-xs text-slate-500 text-center">
+                            Note: Admin privileges are required to change passwords for other accounts.
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        // --- WORKFLOW ACTIONS ---
+        window.forwardInvoice = function(id) {
+            const user = window.appState.currentUser;
+            const invoices = window.appState.invoices;
+            const inv = invoices.find(i => i.id === id);
+            if (!inv) return;
+
+            let nextStage = '';
+            let actionName = '';
+
+            if (inv.currentStage === STAGES.STORE) {
+                nextStage = STAGES.PROCUREMENT;
+                actionName = 'Submitted to Procurement';
+            } else if (inv.currentStage === STAGES.PROCUREMENT) {
+                nextStage = STAGES.BILLING;
+                actionName = 'Confirmed & Submitted to Billing';
+            } else if (inv.currentStage === STAGES.BILLING) {
+                nextStage = STAGES.FILING;
+                actionName = 'Billed & Submitted to Filing';
+            } else if (inv.currentStage === STAGES.FILING) {
+                nextStage = STAGES.COMPLETED;
+                actionName = 'Received & Completed';
+            } else if (user.role === 'Admin') {
+                if (inv.currentStage === STAGES.STORE) nextStage = STAGES.PROCUREMENT;
+                else if (inv.currentStage === STAGES.PROCUREMENT) nextStage = STAGES.BILLING;
+                else if (inv.currentStage === STAGES.BILLING) nextStage = STAGES.FILING;
+                else if (inv.currentStage === STAGES.FILING) nextStage = STAGES.COMPLETED;
+                actionName = 'Advanced by Admin';
+            }
+
+            window.showConfirmationModal(
+                'Confirm Invoice Submission',
+                `Are you sure you want to submit invoice #${inv.invoiceNumber} to ${nextStage}?`,
+                async () => {
+                    inv.currentStage = nextStage;
+                    inv.history.push({
+                        stage: nextStage === STAGES.COMPLETED ? STAGES.FILING : nextStage,
+                        user: user.username,
+                        timestamp: getCurrentTimestamp(),
+                        action: actionName
+                    });
+
+                    await window.saveInvoiceToCloud(inv);
+                    window.showToast(`Invoice #${inv.invoiceNumber} submitted successfully!`);
+                    window.render();
+                }
+            );
+        };
+
+        window.returnInvoice = function(id) {
+            const user = window.appState.currentUser;
+            if (user.role !== 'Admin') {
+                window.showToast('Only Admin can return an invoice to the previous step.', 'error');
+                return;
+            }
+
+            const invoices = window.appState.invoices;
+            const inv = invoices.find(i => i.id === id);
+            if (!inv) return;
+
+            let prevStage = '';
+            if (inv.currentStage === STAGES.PROCUREMENT) prevStage = STAGES.STORE;
+            else if (inv.currentStage === STAGES.BILLING) prevStage = STAGES.PROCUREMENT;
+            else if (inv.currentStage === STAGES.FILING) prevStage = STAGES.BILLING;
+            else if (inv.currentStage === STAGES.COMPLETED) prevStage = STAGES.FILING;
+
+            window.showConfirmationModal(
+                'Return Invoice to Previous Step',
+                `Are you sure you want to return invoice #${inv.invoiceNumber} back to ${prevStage}?`,
+                async () => {
+                    inv.currentStage = prevStage;
+                    inv.history.push({
+                        stage: prevStage,
+                        user: user.username,
+                        timestamp: getCurrentTimestamp(),
+                        action: `Returned by Admin to ${prevStage}`
+                    });
+
+                    await window.saveInvoiceToCloud(inv);
+                    window.showToast(`Invoice #${inv.invoiceNumber} returned to ${prevStage}.`, 'warning');
+                    window.render();
+                }
+            );
+        };
+
+        // EVENT BINDINGS
+        function bindMainLayoutEvents() {
+            const user = window.appState.currentUser;
+            const activeTab = window.appState.activeTab;
+
+            if (activeTab === 'add' && (user.role === 'Main Store' || user.role === 'Admin')) {
+                const supplierInput = document.getElementById('inv-supplier');
+                const suggestionsBox = document.getElementById('supplier-suggestions');
+
+                supplierInput.oninput = (e) => {
+                    const query = e.target.value.toLowerCase().trim();
+                    const suppliers = window.appState.suppliers;
+                    if (!query) {
+                        suggestionsBox.classList.add('hidden');
+                        return;
+                    }
+
+                    const matches = suppliers.filter(s => s.toLowerCase().includes(query));
+                    if (matches.length > 0) {
+                        suggestionsBox.innerHTML = matches.map(m => `
+                            <div class="px-4 py-2.5 hover:bg-emerald-50 cursor-pointer text-sm font-medium text-slate-700 border-b border-slate-100 last:border-0" onclick="selectSupplier('${m}')">
+                                ${m}
+                            </div>
+                        `).join('');
+                        suggestionsBox.classList.remove('hidden');
+                    } else {
+                        suggestionsBox.innerHTML = `
+                            <div class="px-4 py-3 text-xs text-emerald-600 font-semibold bg-emerald-50">
+                                <i class="fa-solid fa-circle-plus mr-1.5"></i>New supplier will be added to database upon submission.
+                            </div>
+                        `;
+                        suggestionsBox.classList.remove('hidden');
+                    }
+                };
+
+                document.getElementById('add-invoice-form').onsubmit = (e) => {
+                    e.preventDefault();
+                    const invoiceNumber = document.getElementById('inv-number').value.trim();
+                    const dateReceived = document.getElementById('inv-date').value;
+                    const supplierName = supplierInput.value.trim();
+                    const amount = document.getElementById('inv-amount').value.trim();
+                    const description = document.getElementById('inv-desc').value.trim();
+
+                    if (!invoiceNumber || !supplierName) {
+                        window.showToast('Please fill in Invoice Number and Supplier Name.', 'error');
+                        return;
+                    }
+
+                    window.showConfirmationModal(
+                        'Confirm New Invoice',
+                        `Add invoice #${invoiceNumber} from "${supplierName}" and submit to Procurement?`,
+                        async () => {
+                            // Auto save supplier if new
+                            let suppliers = window.appState.suppliers;
+                            if (!suppliers.some(s => s.toLowerCase() === supplierName.toLowerCase())) {
+                                await window.saveSupplierToCloud(supplierName);
+                            }
+
+                            const newInvoice = {
+                                id: 'INV-' + Date.now(),
+                                invoiceNumber,
+                                supplierName,
+                                amount,
+                                description,
+                                currentStage: STAGES.PROCUREMENT,
+                                history: [
+                                    {
+                                        stage: STAGES.STORE,
+                                        user: user.username,
+                                        timestamp: `${dateReceived} (${getCurrentTimestamp()})`,
+                                        action: 'Added & Submitted to Procurement'
+                                    }
+                                ]
+                            };
+
+                            await window.saveInvoiceToCloud(newInvoice);
+                            window.showToast('Invoice added & submitted to Procurement!');
+                            window.appState.activeTab = 'dashboard';
+                            window.render();
+                        }
+                    );
+                };
+            }
+
+            if (activeTab === 'users') {
+                const passForm = document.getElementById('change-own-pass-form');
+                if (passForm) {
+                    passForm.onsubmit = async (e) => {
+                        e.preventDefault();
+                        const p1 = document.getElementById('my-new-pass').value;
+                        const p2 = document.getElementById('my-confirm-pass').value;
+
+                        if (p1 !== p2) {
+                            window.showToast('Passwords do not match.', 'error');
+                            return;
+                        }
+
+                        await window.updateUserPinInCloud(user.id, p1);
+                        window.showToast('Password updated successfully!');
+                        window.render();
+                    };
+                }
+            }
+        }
+
+        window.selectSupplier = function(name) {
+            document.getElementById('inv-supplier').value = name;
+            document.getElementById('supplier-suggestions').classList.add('hidden');
+        };
+
+        window.addNewSupplierManually = async function() {
+            const input = document.getElementById('new-supplier-input');
+            const name = input.value.trim();
+            if (!name) return;
+
+            let suppliers = window.appState.suppliers;
+            if (suppliers.includes(name)) {
+                window.showToast('Supplier already exists.', 'warning');
+                return;
+            }
+
+            await window.saveSupplierToCloud(name);
+            input.value = '';
+            window.showToast('Supplier added!');
+        };
+
+        window.adminResetPassword = function(userId, username) {
+            const newPin = prompt(`Enter new password for account "${username}":`);
+            if (newPin && newPin.trim() !== '') {
+                window.updateUserPinInCloud(userId, newPin.trim());
+                window.showToast(`Password for ${username} updated to "${newPin.trim()}"!`);
+            }
+        };
+
+        // Initialize App
+        window.render();
+    </script>
+</body>
+</html>

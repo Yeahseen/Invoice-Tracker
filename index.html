@@ -271,7 +271,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             if (isFirebaseActive && db) {
                 try {
                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', invoice.id), invoice);
-                } catch(e) { console.error("Error saving invoice:", e); }
+                } catch(e ) { console.error("Error saving invoice:", e); window.showToast('Could not save invoice (' + (e.code || 'error') + '). Check Firestore rules.', 'error'); }
             } else {
                 let invoices = window.appState.invoices;
                 const idx = invoices.findIndex(i => i.id === invoice.id);
@@ -287,7 +287,12 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 try {
                     const supId = 'SUP-' + Date.now();
                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'suppliers', supId), { name: supplierName });
-                } catch(e) { console.error("Error saving supplier:", e); }
+                    return true;
+                } catch(e) {
+                    console.error("Error saving supplier:", e);
+                    window.showToast('Could not save supplier (' + (e.code || 'error') + '). Check Firestore rules.', 'error');
+                    return false;
+                }
             } else {
                 let sups = window.appState.suppliers;
                 if (!sups.includes(supplierName)) {
@@ -295,6 +300,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     setLocalStorage('suppliers', sups);
                     window.render();
                 }
+                return true;
             }
         };
 
@@ -1262,7 +1268,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 return;
             }
 
-            await window.saveSupplierToCloud(name);
+            const ok = await window.saveSupplierToCloud(name);
+            if (ok === false) return;
             input.value = '';
             window.showToast('Supplier added!');
         };

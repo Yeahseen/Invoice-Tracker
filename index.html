@@ -345,19 +345,19 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             }, 3500);
         };
 
-        window.showConfirmationModal = function(title, message, onConfirm) {
+        window.showConfirmationModal = function(title, message, onConfirm, confirmLabel = 'Confirm & Proceed', danger = false) {
             const modalContainer = document.getElementById('modal-container');
             modalContainer.innerHTML = `
                 <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
                     <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
-                        <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-4">
+                        <div class="w-12 h-12 rounded-full ${danger ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'} flex items-center justify-center text-xl mb-4">
                             <i class="fa-solid fa-triangle-exclamation"></i>
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 mb-2">${title}</h3>
                         <p class="text-slate-600 text-sm mb-6 leading-relaxed">${message}</p>
                         <div class="flex space-x-3 justify-end">
                             <button id="modal-cancel" class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
-                            <button id="modal-confirm" class="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 shadow-lg shadow-emerald-600/20 transition">Confirm & Proceed</button>
+                            <button id="modal-confirm" class="px-5 py-2.5 rounded-xl ${danger ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'} text-white text-sm font-semibold shadow-lg transition">${confirmLabel}</button>
                         </div>
                     </div>
                 </div>
@@ -689,11 +689,16 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 <h3 class="font-bold text-slate-900 text-base">${queueTitle}</h3>
                                 <p class="text-xs text-slate-500 mt-0.5">${queueSubtitle}</p>
                             </div>
-                            ${user.role === 'Main Store' ? `
-                                <button onclick="switchTab('add')" class="inline-flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-md transition">
-                                    <i class="fa-solid fa-plus"></i><span>New Invoice</span>
+                            <div class="flex flex-wrap gap-2">
+                                <button onclick="exportInvoicesCsv('all')" class="inline-flex items-center justify-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2.5 rounded-xl border border-slate-300 transition" title="Download every invoice (all stages) as a CSV file for Excel">
+                                    <i class="fa-solid fa-file-export"></i><span>Export All</span>
                                 </button>
-                            ` : ''}
+                                ${user.role === 'Main Store' ? `
+                                    <button onclick="switchTab('add')" class="inline-flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-md transition">
+                                        <i class="fa-solid fa-plus"></i><span>New Invoice</span>
+                                    </button>
+                                ` : ''}
+                            </div>
                         </div>
 
                         ${filteredInvoices.length === 0 ? `
@@ -842,6 +847,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             </div>
                         </div>
 
+                        <div id="dup-warning" class="hidden"></div>
+
                         <div class="pt-4 border-t border-slate-100 flex justify-end space-x-3">
                             <button type="button" onclick="switchTab('dashboard')" class="px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
                             <button type="submit" class="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20 transition">
@@ -865,8 +872,13 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             <h3 class="font-bold text-slate-900 text-base">Completed Invoices Archive</h3>
                             <p class="text-xs text-slate-500 mt-0.5">Fully processed, filed and verified invoices (Read-only for all users)</p>
                         </div>
-                        <div class="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
-                            ${completed.length} Completed
+                        <div class="flex items-center gap-3">
+                            <button onclick="exportInvoicesCsv('completed')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition">
+                                <i class="fa-solid fa-file-export"></i><span>Export</span>
+                            </button>
+                            <div class="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                                ${completed.length} Completed
+                            </div>
                         </div>
                     </div>
 
@@ -1182,6 +1194,27 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     }
                 };
 
+                // Live duplicate warning while typing
+                const dupBox = document.getElementById('dup-warning');
+                const checkDup = () => {
+                    const d = window.findDuplicateInvoices(
+                        document.getElementById('inv-number').value,
+                        supplierInput.value,
+                        document.getElementById('inv-amount').value
+                    );
+                    if (d.exact.length) {
+                        dupBox.className = 'p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800';
+                        dupBox.innerHTML = '<b>Duplicate warning:</b> this invoice number, supplier and amount already exist.<ul class="list-disc pl-5 mt-1 space-y-1">' + d.exact.map(describeInvoice).join('') + '</ul>';
+                    } else if (d.partial.length) {
+                        dupBox.className = 'p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800';
+                        dupBox.innerHTML = '<b>Heads up:</b> same invoice number and supplier already exist with a different amount.<ul class="list-disc pl-5 mt-1 space-y-1">' + d.partial.map(describeInvoice).join('') + '</ul>';
+                    } else {
+                        dupBox.className = 'hidden';
+                        dupBox.innerHTML = '';
+                    }
+                };
+                ['inv-number', 'inv-supplier', 'inv-amount'].forEach(id => document.getElementById(id).addEventListener('input', checkDup));
+
                 document.getElementById('add-invoice-form').onsubmit = (e) => {
                     e.preventDefault();
                     const invoiceNumber = document.getElementById('inv-number').value.trim();
@@ -1195,9 +1228,22 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                         return;
                     }
 
+                    const dups = window.findDuplicateInvoices(invoiceNumber, supplierName, amount);
+                    const hasExact = dups.exact.length > 0;
+                    const hasPartial = !hasExact && dups.partial.length > 0;
+                    let modalTitle = 'Confirm New Invoice';
+                    let modalMsg = `Add invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" and submit to Procurement?`;
+                    if (hasExact) {
+                        modalTitle = 'Duplicate Invoice Detected';
+                        modalMsg = `<span class="font-semibold text-rose-600">An invoice with the same invoice number, supplier and amount is already in the system:</span><ul class="list-disc pl-5 mt-2 mb-2 text-xs text-slate-700 space-y-1">${dups.exact.map(describeInvoice).join('')}</ul>Submitting it again could cause a double payment. Only continue if you have confirmed this is a different invoice.`;
+                    } else if (hasPartial) {
+                        modalTitle = 'Possible Duplicate Invoice';
+                        modalMsg = `<span class="font-semibold text-amber-600">An invoice with the same number and supplier already exists, but with a different amount:</span><ul class="list-disc pl-5 mt-2 mb-2 text-xs text-slate-700 space-y-1">${dups.partial.map(describeInvoice).join('')}</ul>You entered ${escapeHtml(amount || 'no amount')}. Please check before continuing.`;
+                    }
+
                     window.showConfirmationModal(
-                        'Confirm New Invoice',
-                        `Add invoice #${invoiceNumber} from "${supplierName}" and submit to Procurement?`,
+                        modalTitle,
+                        modalMsg,
                         async () => {
                             // Auto save supplier if new
                             let suppliers = window.appState.suppliers;
@@ -1226,7 +1272,9 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             window.showToast('Invoice added & submitted to Procurement!');
                             window.appState.activeTab = 'dashboard';
                             window.render();
-                        }
+                        },
+                        (hasExact || hasPartial) ? 'Submit Anyway' : 'Confirm & Proceed',
+                        hasExact
                     );
                 };
             }
@@ -1280,6 +1328,66 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 window.updateUserPinInCloud(userId, newPin.trim());
                 window.showToast(`Password for ${username} updated to "${newPin.trim()}"!`);
             }
+        };
+
+        // --- DUPLICATE CHECK ---
+        function escapeHtml(str) {
+            return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+        function normInvoiceNo(v) { return String(v || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+        function normAmount(v) {
+            const m = String(v || '').replace(/,/g, '').match(/\d+(\.\d+)?/);
+            return m ? parseFloat(m[0]) : null;
+        }
+        // exact = same invoice number + supplier + amount; partial = same number + supplier, different amount
+        window.findDuplicateInvoices = function(invoiceNumber, supplierName, amount) {
+            const n = normInvoiceNo(invoiceNumber);
+            const sup = String(supplierName || '').trim().toLowerCase();
+            if (!n || !sup) return { exact: [], partial: [] };
+            const a = normAmount(amount);
+            const same = window.appState.invoices.filter(i =>
+                normInvoiceNo(i.invoiceNumber) === n && String(i.supplierName || '').trim().toLowerCase() === sup);
+            const exact = same.filter(i => normAmount(i.amount) === a);
+            return { exact, partial: same.filter(i => !exact.includes(i)) };
+        };
+        function describeInvoice(i) {
+            const first = (i.history && i.history[0] && i.history[0].timestamp) ? ' &middot; received ' + escapeHtml(i.history[0].timestamp) : '';
+            return `<li><b>#${escapeHtml(i.invoiceNumber)}</b> &middot; ${escapeHtml(i.supplierName)} &middot; ${escapeHtml(i.amount || 'no amount')} &mdash; now at <i>${escapeHtml(i.currentStage)}</i>${first}</li>`;
+        }
+
+        // --- EXPORT TO CSV (opens in Excel) ---
+        window.exportInvoicesCsv = function(scope) {
+            const all = window.appState.invoices;
+            const list = scope === 'completed' ? all.filter(i => i.currentStage === STAGES.COMPLETED) : all;
+            if (!list.length) { window.showToast('No invoices to export.', 'warning'); return; }
+            const esc = (v) => {
+                let t = String(v == null ? '' : v);
+                if (/^[=+@]/.test(t)) t = "'" + t; // stop spreadsheet formula injection
+                t = t.replace(/"/g, '""');
+                return /[",\n\r]/.test(t) ? '"' + t + '"' : t;
+            };
+            const header = ['Invoice Number', 'Supplier', 'Amount', 'Description', 'Current Stage', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Full History'];
+            const rows = list.map(i => {
+                const h = i.history || [];
+                const first = h[0] || {};
+                const last = h[h.length - 1] || {};
+                return [
+                    i.invoiceNumber, i.supplierName, i.amount, i.description, i.currentStage,
+                    first.timestamp, first.user, last.action, last.user, last.timestamp,
+                    h.map(x => `${x.stage} - ${x.user} - ${x.timestamp} - ${x.action}`).join(' | ')
+                ];
+            });
+            const csv = '\uFEFF' + [header, ...rows].map(r => r.map(esc).join(',')).join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `majani-invoices-${scope === 'completed' ? 'completed' : 'all'}-${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            window.showToast(`Exported ${list.length} invoice${list.length === 1 ? '' : 's'}.`);
         };
 
         // --- SUPPLIER EDIT / DELETE ---

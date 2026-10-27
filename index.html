@@ -701,7 +701,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 <p class="text-xs text-slate-500 mt-0.5">${queueSubtitle}</p>
                             </div>
                             <div class="flex flex-wrap gap-2">
-                                <button onclick="exportInvoicesCsv('all')" class="inline-flex items-center justify-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2.5 rounded-xl border border-slate-300 transition" title="Download every invoice (all stages) as a CSV file for Excel">
+                                <button onclick="openExportDialog('all')" class="inline-flex items-center justify-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2.5 rounded-xl border border-slate-300 transition" title="Download every invoice (all stages) as a CSV file for Excel">
                                     <i class="fa-solid fa-file-export"></i><span>Export All</span>
                                 </button>
                                 ${user.role === 'Main Store' ? `
@@ -902,7 +902,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             <p class="text-xs text-slate-500 mt-0.5">Fully processed, filed and verified invoices (Read-only for all users)</p>
                         </div>
                         <div class="flex items-center gap-3">
-                            <button onclick="exportInvoicesCsv('completed')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition">
+                            <button onclick="openExportDialog('completed')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition">
                                 <i class="fa-solid fa-file-export"></i><span>Export</span>
                             </button>
                             <div class="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
@@ -1400,12 +1400,103 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             return `<li><b>#${escapeHtml(i.invoiceNumber)}</b> &middot; ${escapeHtml(i.supplierName)} &middot; ${escapeHtml(i.amount || 'no amount')} &mdash; now at <i>${escapeHtml(i.currentStage)}</i>${first}</li>`;
         }
 
+        // --- EXPORT DIALOG (filter by supplier / stage) ---
+        window.openExportDialog = function(scope) {
+            const scoped = getExportList(scope);
+            if (!scoped.length) { window.showToast('No invoices to export.', 'warning'); return; }
+
+            // suppliers that actually have invoices in this scope
+            const counts = {};
+            scoped.forEach(i => {
+                const n = String(i.supplierName || '').trim();
+                counts[n] = (counts[n] || 0) + 1;
+            });
+            const supplierNames = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+            const scopeLabel = scope === 'completed' ? 'completed invoices' : scope === 'incomplete' ? 'incomplete invoices' : 'all invoices';
+            const stageOptions = Object.values(STAGES);
+
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100">
+                        <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-4">
+                            <i class="fa-solid fa-file-export"></i>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 mb-1">Export Invoices</h3>
+                        <p class="text-slate-500 text-xs mb-5">Exporting from ${scopeLabel}. Pick a supplier or stage, or leave them on "All" to export everything.</p>
+
+                        <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Supplier</label>
+                        <select id="export-supplier" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4">
+                            <option value="-1">All suppliers (${scoped.length})</option>
+                            ${supplierNames.map((n, idx) => `<option value="${idx}">${escapeHtml(n)} (${counts[n]})</option>`).join('')}
+                        </select>
+
+                        ${scope === 'all' ? `
+                            <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Stage</label>
+                            <select id="export-stage" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4">
+                                <option value="">All stages</option>
+                                ${stageOptions.map(st => `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`).join('')}
+                            </select>
+                        ` : ''}
+
+                        <p id="export-count" class="text-xs font-semibold text-emerald-700 mb-5"></p>
+
+                        <div class="flex space-x-3 justify-end">
+                            <button id="export-cancel" class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
+                            <button id="export-go" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20 transition disabled:opacity-40 disabled:cursor-not-allowed">
+                                <i class="fa-solid fa-download mr-2"></i>Download CSV
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const supSel = document.getElementById('export-supplier');
+            const stageSel = document.getElementById('export-stage');
+            const countEl = document.getElementById('export-count');
+            const goBtn = document.getElementById('export-go');
+
+            const currentFilters = () => {
+                const idx = parseInt(supSel.value, 10);
+                return {
+                    supplier: idx >= 0 ? supplierNames[idx] : '',
+                    stage: stageSel ? stageSel.value : ''
+                };
+            };
+            const refresh = () => {
+                const n = getExportList(scope, currentFilters()).length;
+                countEl.textContent = n === 0 ? 'No invoices match these filters.' : `${n} invoice${n === 1 ? '' : 's'} will be exported.`;
+                countEl.className = 'text-xs font-semibold mb-5 ' + (n === 0 ? 'text-rose-600' : 'text-emerald-700');
+                goBtn.disabled = n === 0;
+            };
+            supSel.onchange = refresh;
+            if (stageSel) stageSel.onchange = refresh;
+            refresh();
+
+            document.getElementById('export-cancel').onclick = () => { modalContainer.innerHTML = ''; };
+            goBtn.onclick = () => {
+                const f = currentFilters();
+                modalContainer.innerHTML = '';
+                window.exportInvoicesCsv(scope, f);
+            };
+        };
+
         // --- EXPORT TO CSV (opens in Excel) ---
-        window.exportInvoicesCsv = function(scope) {
+        function getExportList(scope, filters = {}) {
             const all = window.appState.invoices;
-            const list = scope === 'completed' ? all.filter(i => i.currentStage === STAGES.COMPLETED)
+            let list = scope === 'completed' ? all.filter(i => i.currentStage === STAGES.COMPLETED)
                 : scope === 'incomplete' ? all.filter(i => i.currentStage === STAGES.INCOMPLETE) : all;
-            if (!list.length) { window.showToast('No invoices to export.', 'warning'); return; }
+            if (filters.supplier) {
+                const sup = filters.supplier.trim().toLowerCase();
+                list = list.filter(i => String(i.supplierName || '').trim().toLowerCase() === sup);
+            }
+            if (filters.stage) list = list.filter(i => i.currentStage === filters.stage);
+            return list;
+        }
+
+        window.exportInvoicesCsv = function(scope, filters = {}) {
+            const list = getExportList(scope, filters);
+            if (!list.length) { window.showToast('No invoices match those filters.', 'warning'); return; }
             const esc = (v) => {
                 let t = String(v == null ? '' : v);
                 if (/^[=+@]/.test(t)) t = "'" + t; // stop spreadsheet formula injection
@@ -1428,7 +1519,12 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `majani-invoices-${scope}-${new Date().toISOString().split('T')[0]}.csv`;
+            const slug = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            const parts = ['majani-invoices', scope];
+            if (filters.supplier) parts.push(slug(filters.supplier));
+            if (filters.stage) parts.push(slug(filters.stage));
+            parts.push(new Date().toISOString().split('T')[0]);
+            a.download = parts.join('-') + '.csv';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1483,7 +1579,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             <p class="text-xs text-slate-500 mt-0.5">Invoices labelled incomplete by Main Store (Alimah). Visible to Alimah and Procurement (Sharon), who can both submit them once sorted.</p>
                         </div>
                         <div class="flex items-center gap-3">
-                            <button onclick="exportInvoicesCsv('incomplete')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition">
+                            <button onclick="openExportDialog('incomplete')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition">
                                 <i class="fa-solid fa-file-export"></i><span>Export</span>
                             </button>
                             <div class="px-3 py-1.5 rounded-full bg-rose-50 text-rose-700 text-xs font-bold border border-rose-200">${incomplete.length} Incomplete</div>

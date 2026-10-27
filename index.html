@@ -92,7 +92,8 @@
             PROCUREMENT: 'Procurement (Sharon)',
             BILLING: 'Billing (Lilian)',
             FILING: 'Filing (Vivian)',
-            COMPLETED: 'Completed'
+            COMPLETED: 'Completed',
+            INCOMPLETE: 'Incomplete'
         };
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'majani-mingi-sisal';
@@ -493,6 +494,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             else if (user.role === 'Admin') pendingCount = invoices.filter(i => i.currentStage !== STAGES.COMPLETED).length;
 
             const completedCount = invoices.filter(i => i.currentStage === STAGES.COMPLETED).length;
+            const incompleteCount = invoices.filter(i => i.currentStage === STAGES.INCOMPLETE).length;
+            const canSeeIncomplete = ['Main Store', 'Procurement', 'Admin'].includes(user.role);
 
             return `
                 <div class="min-h-full flex flex-col md:flex-row bg-slate-100 flex-1">
@@ -540,6 +543,13 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 ${(user.role === 'Main Store' || user.role === 'Admin') ? `
                                     <button onclick="switchTab('add')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'add' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
                                         <i class="fa-solid fa-plus-circle w-5"></i><span>Add New Invoice</span>
+                                    </button>
+                                ` : ''}
+
+                                ${canSeeIncomplete ? `
+                                    <button onclick="switchTab('incomplete')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'incomplete' ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                        <span class="flex items-center space-x-3"><i class="fa-solid fa-triangle-exclamation w-5"></i><span>Incomplete Invoices</span></span>
+                                        ${incompleteCount > 0 ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold ${activeTab === 'incomplete' ? 'bg-white text-rose-700' : 'bg-rose-500/20 text-rose-400'}">${incompleteCount}</span>` : ''}
                                     </button>
                                 ` : ''}
 
@@ -610,6 +620,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             switch (window.appState.activeTab) {
                 case 'dashboard': return renderDashboardTab();
                 case 'add': return renderAddInvoiceTab();
+                case 'incomplete': return renderIncompleteTab();
                 case 'completed': return renderCompletedTab();
                 case 'suppliers': return renderSuppliersTab();
                 case 'users': return renderUsersManagementTab();
@@ -768,6 +779,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 case STAGES.BILLING: return 'bg-purple-100 text-purple-800 border border-purple-200';
                 case STAGES.FILING: return 'bg-indigo-100 text-indigo-800 border border-indigo-200';
                 case STAGES.COMPLETED: return 'bg-emerald-100 text-emerald-800 border border-emerald-200';
+                case STAGES.INCOMPLETE: return 'bg-rose-100 text-rose-800 border border-rose-200';
                 default: return 'bg-slate-100 text-slate-800';
             }
         }
@@ -781,6 +793,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 (user.role === 'Procurement' && inv.currentStage === STAGES.PROCUREMENT) ||
                 (user.role === 'Billing' && inv.currentStage === STAGES.BILLING) ||
                 (user.role === 'Filing' && inv.currentStage === STAGES.FILING) ||
+                ((user.role === 'Main Store' || user.role === 'Procurement') && inv.currentStage === STAGES.INCOMPLETE) ||
                 (user.role === 'Admin')
             );
 
@@ -788,6 +801,14 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 buttons += `
                     <button onclick="forwardInvoice('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5">
                         <span>Submit</span><i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                `;
+            }
+
+            if ((user.role === 'Main Store' || user.role === 'Admin') && inv.currentStage === STAGES.STORE) {
+                buttons += `
+                    <button onclick="markInvoiceIncomplete('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5" title="Move to the Incomplete Invoices section">
+                        <i class="fa-solid fa-triangle-exclamation"></i><span>Mark Incomplete</span>
                     </button>
                 `;
             }
@@ -847,12 +868,20 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             </div>
                         </div>
 
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">What is missing? (only for incomplete invoices)</label>
+                            <input type="text" id="inv-incomplete-note" placeholder="e.g. No delivery note attached" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-rose-400">
+                        </div>
+
                         <div id="dup-warning" class="hidden"></div>
 
-                        <div class="pt-4 border-t border-slate-100 flex justify-end space-x-3">
-                            <button type="button" onclick="switchTab('dashboard')" class="px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
-                            <button type="submit" class="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20 transition">
+                        <div class="pt-4 border-t border-slate-100 flex flex-wrap justify-end gap-3">
+                            <button type="button" onclick="switchTab('dashboard')" class="order-0 px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
+                            <button type="submit" data-mode="submit" class="order-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20 transition">
                                 <i class="fa-solid fa-paper-plane mr-2"></i>Save & Submit to Procurement
+                            </button>
+                            <button type="submit" data-mode="incomplete" class="order-1 px-5 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold shadow-lg shadow-rose-500/20 transition">
+                                <i class="fa-solid fa-triangle-exclamation mr-2"></i>Save as Incomplete
                             </button>
                         </div>
                     </form>
@@ -1084,7 +1113,15 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             let nextStage = '';
             let actionName = '';
 
-            if (inv.currentStage === STAGES.STORE) {
+            if (inv.currentStage === STAGES.INCOMPLETE) {
+                if (user.role === 'Procurement') {
+                    nextStage = STAGES.BILLING;
+                    actionName = 'Confirmed (was Incomplete) & Submitted to Billing';
+                } else {
+                    nextStage = STAGES.PROCUREMENT;
+                    actionName = user.role === 'Admin' ? 'Advanced by Admin (was Incomplete)' : 'Completed & Submitted to Procurement';
+                }
+            } else if (inv.currentStage === STAGES.STORE) {
                 nextStage = STAGES.PROCUREMENT;
                 actionName = 'Submitted to Procurement';
             } else if (inv.currentStage === STAGES.PROCUREMENT) {
@@ -1135,7 +1172,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             if (!inv) return;
 
             let prevStage = '';
-            if (inv.currentStage === STAGES.PROCUREMENT) prevStage = STAGES.STORE;
+            if (inv.currentStage === STAGES.INCOMPLETE) prevStage = STAGES.STORE;
+            else if (inv.currentStage === STAGES.PROCUREMENT) prevStage = STAGES.STORE;
             else if (inv.currentStage === STAGES.BILLING) prevStage = STAGES.PROCUREMENT;
             else if (inv.currentStage === STAGES.FILING) prevStage = STAGES.BILLING;
             else if (inv.currentStage === STAGES.COMPLETED) prevStage = STAGES.FILING;
@@ -1222,6 +1260,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     const supplierName = supplierInput.value.trim();
                     const amount = document.getElementById('inv-amount').value.trim();
                     const description = document.getElementById('inv-desc').value.trim();
+                    const asIncomplete = !!(e.submitter && e.submitter.dataset && e.submitter.dataset.mode === 'incomplete');
+                    const incompleteNote = document.getElementById('inv-incomplete-note').value.trim();
 
                     if (!invoiceNumber || !supplierName) {
                         window.showToast('Please fill in Invoice Number and Supplier Name.', 'error');
@@ -1231,8 +1271,10 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     const dups = window.findDuplicateInvoices(invoiceNumber, supplierName, amount);
                     const hasExact = dups.exact.length > 0;
                     const hasPartial = !hasExact && dups.partial.length > 0;
-                    let modalTitle = 'Confirm New Invoice';
-                    let modalMsg = `Add invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" and submit to Procurement?`;
+                    let modalTitle = asIncomplete ? 'Save Incomplete Invoice' : 'Confirm New Invoice';
+                    let modalMsg = asIncomplete
+                        ? `Save invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" as <b>incomplete</b>? It will go to the Incomplete Invoices section, where Alimah and Sharon can submit it later.`
+                        : `Add invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" and submit to Procurement?`;
                     if (hasExact) {
                         modalTitle = 'Duplicate Invoice Detected';
                         modalMsg = `<span class="font-semibold text-rose-600">An invoice with the same invoice number, supplier and amount is already in the system:</span><ul class="list-disc pl-5 mt-2 mb-2 text-xs text-slate-700 space-y-1">${dups.exact.map(describeInvoice).join('')}</ul>Submitting it again could cause a double payment. Only continue if you have confirmed this is a different invoice.`;
@@ -1257,20 +1299,23 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 supplierName,
                                 amount,
                                 description,
-                                currentStage: STAGES.PROCUREMENT,
+                                currentStage: asIncomplete ? STAGES.INCOMPLETE : STAGES.PROCUREMENT,
+                                incompleteNote: asIncomplete ? incompleteNote : '',
                                 history: [
                                     {
                                         stage: STAGES.STORE,
                                         user: user.username,
                                         timestamp: `${dateReceived} (${getCurrentTimestamp()})`,
-                                        action: 'Added & Submitted to Procurement'
+                                        action: asIncomplete
+                                            ? 'Added & Marked Incomplete' + (incompleteNote ? ': ' + incompleteNote : '')
+                                            : 'Added & Submitted to Procurement'
                                     }
                                 ]
                             };
 
                             await window.saveInvoiceToCloud(newInvoice);
-                            window.showToast('Invoice added & submitted to Procurement!');
-                            window.appState.activeTab = 'dashboard';
+                            window.showToast(asIncomplete ? 'Invoice saved as incomplete.' : 'Invoice added & submitted to Procurement!', asIncomplete ? 'warning' : 'success');
+                            window.appState.activeTab = asIncomplete ? 'incomplete' : 'dashboard';
                             window.render();
                         },
                         (hasExact || hasPartial) ? 'Submit Anyway' : 'Confirm & Proceed',
@@ -1358,7 +1403,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
         // --- EXPORT TO CSV (opens in Excel) ---
         window.exportInvoicesCsv = function(scope) {
             const all = window.appState.invoices;
-            const list = scope === 'completed' ? all.filter(i => i.currentStage === STAGES.COMPLETED) : all;
+            const list = scope === 'completed' ? all.filter(i => i.currentStage === STAGES.COMPLETED)
+                : scope === 'incomplete' ? all.filter(i => i.currentStage === STAGES.INCOMPLETE) : all;
             if (!list.length) { window.showToast('No invoices to export.', 'warning'); return; }
             const esc = (v) => {
                 let t = String(v == null ? '' : v);
@@ -1366,14 +1412,14 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 t = t.replace(/"/g, '""');
                 return /[",\n\r]/.test(t) ? '"' + t + '"' : t;
             };
-            const header = ['Invoice Number', 'Supplier', 'Amount', 'Description', 'Current Stage', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Full History'];
+            const header = ['Invoice Number', 'Supplier', 'Amount', 'Description', 'Current Stage', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Incomplete Note', 'Full History'];
             const rows = list.map(i => {
                 const h = i.history || [];
                 const first = h[0] || {};
                 const last = h[h.length - 1] || {};
                 return [
                     i.invoiceNumber, i.supplierName, i.amount, i.description, i.currentStage,
-                    first.timestamp, first.user, last.action, last.user, last.timestamp,
+                    first.timestamp, first.user, last.action, last.user, last.timestamp, i.incompleteNote,
                     h.map(x => `${x.stage} - ${x.user} - ${x.timestamp} - ${x.action}`).join(' | ')
                 ];
             });
@@ -1382,13 +1428,119 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `majani-invoices-${scope === 'completed' ? 'completed' : 'all'}-${new Date().toISOString().split('T')[0]}.csv`;
+            a.download = `majani-invoices-${scope}-${new Date().toISOString().split('T')[0]}.csv`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 1000);
             window.showToast(`Exported ${list.length} invoice${list.length === 1 ? '' : 's'}.`);
         };
+
+        // --- INCOMPLETE INVOICES ---
+        window.markInvoiceIncomplete = function(id) {
+            const user = window.appState.currentUser;
+            if (user.role !== 'Main Store' && user.role !== 'Admin') {
+                window.showToast('Only Main Store (Alimah) can mark an invoice as incomplete.', 'error');
+                return;
+            }
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv || inv.currentStage !== STAGES.STORE) return;
+            const note = prompt(`What is missing or incomplete on invoice #${inv.invoiceNumber}? (e.g. no delivery note, missing LPO)`, '');
+            if (note === null) return;
+            window.showConfirmationModal(
+                'Mark Invoice Incomplete',
+                `Move invoice #${escapeHtml(inv.invoiceNumber)} to the Incomplete Invoices section? Alimah and Sharon will both be able to see and submit it from there.`,
+                async () => {
+                    inv.currentStage = STAGES.INCOMPLETE;
+                    inv.incompleteNote = note.trim();
+                    inv.history.push({
+                        stage: STAGES.INCOMPLETE,
+                        user: user.username,
+                        timestamp: getCurrentTimestamp(),
+                        action: 'Marked Incomplete' + (note.trim() ? ': ' + note.trim() : '')
+                    });
+                    await window.saveInvoiceToCloud(inv);
+                    window.showToast(`Invoice #${inv.invoiceNumber} moved to Incomplete Invoices.`, 'warning');
+                    window.render();
+                },
+                'Mark Incomplete',
+                true
+            );
+        };
+
+        function renderIncompleteTab() {
+            const user = window.appState.currentUser;
+            if (!['Main Store', 'Procurement', 'Admin'].includes(user.role)) {
+                return '<div class="p-12 text-center text-slate-500 text-sm">You do not have access to the Incomplete Invoices section.</div>';
+            }
+            const incomplete = window.appState.invoices.filter(i => i.currentStage === STAGES.INCOMPLETE);
+
+            return `
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-base">Incomplete Invoices</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Invoices labelled incomplete by Main Store (Alimah). Visible to Alimah and Procurement (Sharon), who can both submit them once sorted.</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button onclick="exportInvoicesCsv('incomplete')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition">
+                                <i class="fa-solid fa-file-export"></i><span>Export</span>
+                            </button>
+                            <div class="px-3 py-1.5 rounded-full bg-rose-50 text-rose-700 text-xs font-bold border border-rose-200">${incomplete.length} Incomplete</div>
+                        </div>
+                    </div>
+
+                    ${incomplete.length === 0 ? `
+                        <div class="p-12 text-center">
+                            <div class="w-16 h-16 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center text-2xl mx-auto mb-3">
+                                <i class="fa-solid fa-clipboard-check"></i>
+                            </div>
+                            <h4 class="font-bold text-slate-700 text-sm">No Incomplete Invoices</h4>
+                            <p class="text-slate-400 text-xs mt-1">Invoices marked incomplete by Alimah will appear here.</p>
+                        </div>
+                    ` : `
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-slate-50/70 border-b border-slate-200 text-slate-600 text-xs uppercase tracking-wider font-semibold">
+                                        <th class="p-4">Invoice #</th>
+                                        <th class="p-4">Supplier</th>
+                                        <th class="p-4">Amount / Desc</th>
+                                        <th class="p-4">What is missing</th>
+                                        <th class="p-4">History</th>
+                                        <th class="p-4 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 text-sm">
+                                    ${incomplete.map(inv => `
+                                        <tr class="hover:bg-slate-50/50 transition">
+                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}</td>
+                                            <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
+                                            <td class="p-4">
+                                                <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
+                                                <div class="text-xs text-slate-400 truncate max-w-xs">${escapeHtml(inv.description || 'No description')}</div>
+                                            </td>
+                                            <td class="p-4 text-xs text-rose-700 max-w-xs">${inv.incompleteNote ? escapeHtml(inv.incompleteNote) : '<span class="text-slate-400">No note given</span>'}</td>
+                                            <td class="p-4">
+                                                <div class="space-y-1">
+                                                    ${inv.history.map(h => `
+                                                        <div class="text-[11px] text-slate-500">
+                                                            <span class="font-semibold text-slate-700">${escapeHtml(h.user)}</span>: ${escapeHtml(h.action)}
+                                                            <span class="text-slate-400">(${escapeHtml(h.timestamp)})</span>
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </td>
+                                            <td class="p-4 text-right space-x-2">${getRoleActionButtons(inv)}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `}
+                </div>
+            `;
+        }
 
         // --- SUPPLIER EDIT / DELETE ---
         async function findSupplierDocs(name) {

@@ -62,7 +62,11 @@
             setDoc, 
             updateDoc, 
             collection, 
-            onSnapshot 
+            onSnapshot,
+            getDocs,
+            deleteDoc,
+            query,
+            where
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // APP CONSTANTS & DEFAULTS
@@ -1269,6 +1273,76 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 window.updateUserPinInCloud(userId, newPin.trim());
                 window.showToast(`Password for ${username} updated to "${newPin.trim()}"!`);
             }
+        };
+
+        // --- SUPPLIER EDIT / DELETE ---
+        async function findSupplierDocs(name) {
+            const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'suppliers'), where('name', '==', name));
+            const snap = await getDocs(q);
+            return snap.docs;
+        }
+
+        window.editSupplier = async function(idx) {
+            const oldName = window.appState.suppliers[idx];
+            if (oldName === undefined) return;
+            const input = prompt('Edit supplier name:', oldName);
+            if (input === null) return;
+            const newName = input.trim();
+            if (!newName || newName === oldName) return;
+            if (window.appState.suppliers.some((s, i) => i !== idx && s.toLowerCase() === newName.toLowerCase())) {
+                window.showToast('A supplier with that name already exists.', 'warning');
+                return;
+            }
+            try {
+                if (isFirebaseActive && db) {
+                    const docs = await findSupplierDocs(oldName);
+                    if (docs.length === 0) { window.showToast('Supplier not found in database.', 'error'); return; }
+                    for (const d of docs) await updateDoc(d.ref, { name: newName });
+                    // keep existing invoices pointing at the renamed supplier
+                    const invQ = query(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'), where('supplierName', '==', oldName));
+                    const invSnap = await getDocs(invQ);
+                    for (const d of invSnap.docs) await updateDoc(d.ref, { supplierName: newName });
+                } else {
+                    window.appState.suppliers[idx] = newName;
+                    setLocalStorage('suppliers', window.appState.suppliers);
+                    window.appState.invoices.forEach(inv => { if (inv.supplierName === oldName) inv.supplierName = newName; });
+                    setLocalStorage('invoices', window.appState.invoices);
+                    window.render();
+                }
+                window.showToast('Supplier updated!');
+            } catch (e) {
+                console.error('Error editing supplier:', e);
+                window.showToast('Could not update supplier. Check your connection or database rules.', 'error');
+            }
+        };
+
+        window.deleteSupplier = function(idx) {
+            const name = window.appState.suppliers[idx];
+            if (name === undefined) return;
+            if (window.appState.suppliers.length <= 1) {
+                window.showToast('At least one supplier must remain.', 'warning');
+                return;
+            }
+            window.showConfirmationModal(
+                'Delete Supplier',
+                `Delete "${name}" from the suppliers directory? Existing invoices from this supplier will keep their name.`,
+                async () => {
+                    try {
+                        if (isFirebaseActive && db) {
+                            const docs = await findSupplierDocs(name);
+                            for (const d of docs) await deleteDoc(d.ref);
+                        } else {
+                            window.appState.suppliers.splice(idx, 1);
+                            setLocalStorage('suppliers', window.appState.suppliers);
+                            window.render();
+                        }
+                        window.showToast('Supplier deleted.');
+                    } catch (e) {
+                        console.error('Error deleting supplier:', e);
+                        window.showToast('Could not delete supplier. Check your connection or database rules.', 'error');
+                    }
+                }
+            );
         };
 
         // Initialize App

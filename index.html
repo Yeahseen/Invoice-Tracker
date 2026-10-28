@@ -48,12 +48,15 @@
 
     <!-- Firebase SDK Modular Scripts -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { 
-            getAuth, 
-            signInAnonymously, 
-            signInWithCustomToken, 
-            onAuthStateChanged 
+        import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import {
+            getAuth,
+            onAuthStateChanged,
+            signInWithEmailAndPassword,
+            signOut,
+            createUserWithEmailAndPassword,
+            sendPasswordResetEmail,
+            updatePassword
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, 
@@ -70,13 +73,8 @@
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // APP CONSTANTS & DEFAULTS
-        const DEFAULT_USERS = [
-            { id: 'alimah', username: 'Alimah', role: 'Main Store', pin: 'store123', avatar: '🌱', description: 'Receives and enters new invoices' },
-            { id: 'sharon', username: 'Sharon', role: 'Procurement', pin: 'sharon123', avatar: '📋', description: 'Confirms invoices from Stores' },
-            { id: 'lilian', username: 'Lilian', role: 'Billing', pin: 'lilian123', avatar: '💳', description: 'Processes and bills confirmed invoices' },
-            { id: 'vivian', username: 'Vivian', role: 'Filing', pin: 'vivian123', avatar: '📁', description: 'Receives and completes filing process' },
-            { id: 'admin', username: 'Admin', role: 'Admin', pin: 'admin123', avatar: '👑', description: 'System Administrator & Supervisor' }
-        ];
+        const ROLES = ['Main Store', 'Procurement', 'Billing', 'Filing', 'Admin'];
+        const ROLE_AVATARS = { 'Main Store': '🌱', 'Procurement': '📋', 'Billing': '💳', 'Filing': '📁', 'Admin': '👑' };
 
         const DEFAULT_SUPPLIERS = [
             'Greenfields Farm Inputs Ltd',
@@ -123,16 +121,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
-
-            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-            if (token) {
-                await signInWithCustomToken(auth, token);
-            } else {
-                await signInAnonymously(auth);
-            }
-
             isFirebaseActive = true;
-            firebaseStatus = 'Live Sync Active';
+            firebaseStatus = 'Secure Sync';
         } catch (err) {
             console.warn("Firebase fallback mode:", err);
             isFirebaseActive = false;
@@ -141,11 +131,15 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
 
         // --- GLOBAL APP STATE ---
         window.appState = {
-            currentUser: JSON.parse(localStorage.getItem('majani_current_user')) || null,
+            currentUser: null,
+            authReady: false,
+            authError: '',
+            legacyUserDocs: 0,
+            dashFilter: { q: '', supplier: '', stage: '' },
             activeTab: 'dashboard',
             invoices: [],
             suppliers: DEFAULT_SUPPLIERS,
-            users: DEFAULT_USERS,
+            users: [],
             firebaseStatus: firebaseStatus,
             isFirebaseActive: isFirebaseActive,
             db: db,
@@ -163,7 +157,6 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
         }
 
         // Initial Local Fallbacks
-        if (!localStorage.getItem('majani_users')) setLocalStorage('users', DEFAULT_USERS);
         if (!localStorage.getItem('majani_suppliers')) setLocalStorage('suppliers', DEFAULT_SUPPLIERS);
         if (!localStorage.getItem('majani_invoices')) {
             const initialInvoices = [
@@ -195,76 +188,69 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
         }
 
         // Load Local initial values
-        window.appState.users = getLocalStorage('users', DEFAULT_USERS);
+        window.appState.users = [];
         window.appState.suppliers = getLocalStorage('suppliers', DEFAULT_SUPPLIERS);
-        window.appState.invoices = getLocalStorage('invoices', []);
+        window.appState.invoices = [];
 
-        // --- FIREBASE REALTIME LISTENERS ---
-        if (isFirebaseActive && db) {
-            const invoicesRef = collection(db, 'artifacts', appId, 'public', 'data', 'invoices');
-            const suppliersRef = collection(db, 'artifacts', appId, 'public', 'data', 'suppliers');
-            const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+        // --- FIREBASE REALTIME LISTENERS (started only after sign-in) ---
+        const dataPath = ['artifacts', appId, 'public', 'data'];
+        let unsubscribers = [];
+        function stopListeners() { unsubscribers.forEach(u => { try { u(); } catch (e) {} }); unsubscribers = []; }
+        function onListenError(label, err) {
+            console.error('Firestore ' + label + ' error:', err);
+            if (err && err.code === 'permission-denied') window.showToast('Access denied while loading ' + label + '. Check the Firestore rules and your role.', 'error');
+        }
+        // Re-draw unless the person is typing, so a live update never wipes a form or search box
+        function softRender() {
+            const a = document.activeElement;
+            if (a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName) && document.getElementById('app').contains(a)) return;
+            if (window.appState.activeTab === 'add') return;
+            window.render();
+        }
+        function startListeners() {
+            stopListeners();
+            unsubscribers.push(onSnapshot(collection(db, ...dataPath, 'invoices'), (snapshot) => {
+                const items = [];
+                snapshot.forEach(d => items.push({ id: d.id, ...d.data() }));
+                window.appState.invoices = items;
+                softRender();
+            }, (e) => onListenError('invoices', e)));
 
-            // Listen for Invoices
-            onSnapshot(invoicesRef, (snapshot) => {
-                let items = [];
-                snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
-                if (items.length > 0) {
-                    window.appState.invoices = items;
-                    setLocalStorage('invoices', items);
-                    window.render();
-                } else {
-                    // Seed initial if empty
-                    window.appState.invoices.forEach(inv => {
-                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', inv.id), inv);
-                    });
-                }
-            }, (error) => {
-                console.error("Firestore Invoices Error:", error);
-            });
-
-            // Listen for Suppliers
-            onSnapshot(suppliersRef, (snapshot) => {
-                let sups = [];
-                snapshot.forEach(doc => sups.push(doc.data().name));
+            unsubscribers.push(onSnapshot(collection(db, ...dataPath, 'suppliers'), (snapshot) => {
+                const sups = [];
+                snapshot.forEach(d => sups.push(d.data().name));
+                const role = window.appState.currentUser && window.appState.currentUser.role;
                 if (sups.length > 0) {
                     window.appState.suppliers = sups;
-                    setLocalStorage('suppliers', sups);
-                    window.render();
-                } else {
-                    DEFAULT_SUPPLIERS.forEach((s, idx) => {
-                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'suppliers', `SUP-${idx}`), { name: s });
+                    softRender();
+                } else if (role === 'Admin' || role === 'Main Store') {
+                    DEFAULT_SUPPLIERS.forEach((name, idx) => {
+                        setDoc(doc(db, ...dataPath, 'suppliers', `SUP-${idx}`), { name });
                     });
                 }
-            }, (error) => {
-                console.error("Firestore Suppliers Error:", error);
-            });
+            }, (e) => onListenError('suppliers', e)));
 
-            // Listen for Users / Passwords
-            onSnapshot(usersRef, (snapshot) => {
-                let uList = [];
-                snapshot.forEach(doc => uList.push(doc.data()));
-                if (uList.length > 0) {
-                    window.appState.users = uList;
-                    setLocalStorage('users', uList);
-
-                    // Update current logged-in user reference if pin changed
-                    if (window.appState.currentUser) {
-                        const updated = uList.find(u => u.username === window.appState.currentUser.username);
-                        if (updated) {
-                            window.appState.currentUser = updated;
-                            setLocalStorage('current_user', updated);
-                        }
+            unsubscribers.push(onSnapshot(collection(db, ...dataPath, 'users'), (snapshot) => {
+                const list = [];
+                let legacy = 0;
+                snapshot.forEach(d => {
+                    const data = d.data();
+                    if (data.uid) list.push({ id: d.id, ...data });
+                    else legacy++;
+                });
+                window.appState.users = list;
+                window.appState.legacyUserDocs = legacy;
+                const me = window.appState.currentUser;
+                if (me) {
+                    const mine = list.find(u => u.id === me.id);
+                    if (!mine) {
+                        if (list.length > 0) { window.showToast('Your access has been removed.', 'error'); window.logout(); }
+                        return;
                     }
-                    window.render();
-                } else {
-                    DEFAULT_USERS.forEach(u => {
-                        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.id), u);
-                    });
+                    if (mine.role !== me.role) { me.role = mine.role; me.avatar = mine.avatar || ROLE_AVATARS[mine.role]; }
                 }
-            }, (error) => {
-                console.error("Firestore Users Error:", error);
-            });
+                softRender();
+            }, (e) => onListenError('users', e)));
         }
 
         // SYNC STATE TO FIREBASE OR LOCAL
@@ -302,23 +288,6 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     window.render();
                 }
                 return true;
-            }
-        };
-
-        window.updateUserPinInCloud = async function(userId, newPin) {
-            let uList = window.appState.users;
-            const targetUser = uList.find(u => u.id === userId || u.username === userId);
-            if (!targetUser) return;
-
-            targetUser.pin = newPin;
-
-            if (isFirebaseActive && db) {
-                try {
-                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', targetUser.id), targetUser);
-                } catch(e) { console.error("Error updating password:", e); }
-            } else {
-                setLocalStorage('users', uList);
-                window.render();
             }
         };
 
@@ -384,18 +353,27 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
         // --- RENDER APP ---
         window.render = function() {
             const app = document.getElementById('app');
+            if (!window.appState.isFirebaseActive) {
+                app.innerHTML = '<div class="min-h-screen flex items-center justify-center p-6 text-center"><div class="max-w-sm"><h1 class="text-lg font-bold text-slate-900 mb-2">Cannot connect</h1><p class="text-sm text-slate-500 mb-4">The system could not reach the database. Check your internet connection and reload the page.</p><button onclick="location.reload()" class="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold">Reload</button></div></div>';
+                return;
+            }
+            if (!window.appState.authReady) {
+                app.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-500 text-sm">Loading...</div>';
+                return;
+            }
             if (!window.appState.currentUser) {
                 app.innerHTML = renderLoginScreen();
                 bindLoginEvents();
             } else {
                 app.innerHTML = renderMainLayout();
                 bindMainLayoutEvents();
+                if (window.applyDashFilter) window.applyDashFilter();
             }
         };
 
         // LOGIN SCREEN
         function renderLoginScreen() {
-            const users = window.appState.users;
+            const err = window.appState.authError;
             return `
                 <div class="min-h-screen bg-gradient-to-br from-emerald-900 via-emerald-800 to-slate-900 flex flex-col justify-center items-center p-4">
                     <div class="max-w-md w-full bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-white/20">
@@ -405,76 +383,61 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             </div>
                             <h1 class="text-2xl font-bold text-slate-900">Majani Mingi Sisal Estate</h1>
                             <p class="text-slate-500 text-sm mt-1">Invoice Tracking System</p>
-                            
-                            <!-- Realtime Status Indicator -->
-                            <div class="mt-3 inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700">
-                                <span class="w-2.5 h-2.5 rounded-full ${window.appState.isFirebaseActive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}"></span>
-                                <span>${window.appState.firebaseStatus}</span>
-                            </div>
                         </div>
+
+                        ${err ? `<div class="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium">${escapeHtml(err)}</div>` : ''}
 
                         <form id="login-form" class="space-y-4">
                             <div>
-                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Select User Account</label>
-                                <select id="login-user" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                                    <option value="" disabled selected>-- Choose your account --</option>
-                                    ${users.map(u => `<option value="${u.username}">${u.username} (${u.role})</option>`).join('')}
-                                </select>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Email</label>
+                                <input type="email" id="login-email" autocomplete="username" placeholder="you@example.com" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             </div>
                             <div>
-                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Password / PIN</label>
-                                <input type="password" id="login-pin" placeholder="Enter password" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Password</label>
+                                <input type="password" id="login-pin" autocomplete="current-password" placeholder="Enter password" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             </div>
-                            <button type="submit" class="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/30 transition duration-200 mt-2">
+                            <button type="submit" class="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/30 transition duration-200 mt-2 disabled:opacity-60">
                                 Sign In <i class="fa-solid fa-arrow-right ml-2"></i>
                             </button>
+                            <button type="button" id="forgot-btn" class="w-full text-center text-xs font-semibold text-emerald-700 hover:underline">Forgot password?</button>
                         </form>
-
-                        <div class="mt-8 pt-6 border-t border-slate-100">
-                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider text-center mb-3">Quick Login (Click User)</p>
-                            <div class="grid grid-cols-2 gap-2">
-                                ${users.map(u => `
-                                    <button type="button" onclick="fillDemo('${u.username}', '${u.pin}')" class="text-left p-2.5 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/50 transition group">
-                                        <div class="text-xs font-bold text-slate-800 group-hover:text-emerald-700">${u.username}</div>
-                                        <div class="text-[10px] text-slate-500 truncate">${u.role}</div>
-                                    </button>
-                                `).join('')}
-                            </div>
-                        </div>
                     </div>
                     <div class="text-center mt-6 text-emerald-200/60 text-xs">
-                        &copy; 2026 Majani Mingi Sisal Estate Ltd. Live Multi-User Sync.
+                        &copy; 2026 Majani Mingi Sisal Estate Ltd. Accounts are created by the Admin.
                     </div>
                 </div>
             `;
         }
 
-        window.fillDemo = function(username, pin) {
-            document.getElementById('login-user').value = username;
-            document.getElementById('login-pin').value = pin;
-        };
-
         function bindLoginEvents() {
-            document.getElementById('login-form').onsubmit = (e) => {
+            const form = document.getElementById('login-form');
+            form.onsubmit = async (e) => {
                 e.preventDefault();
-                const username = document.getElementById('login-user').value;
-                const pin = document.getElementById('login-pin').value;
-
-                if (!username || !pin) {
-                    window.showToast('Please select a user and enter your password.', 'error');
+                const email = document.getElementById('login-email').value.trim();
+                const pass = document.getElementById('login-pin').value;
+                if (!email || !pass) {
+                    window.showToast('Enter your email and password.', 'error');
                     return;
                 }
-
-                const userObj = window.appState.users.find(u => u.username === username);
-                if (userObj && userObj.pin === pin) {
-                    window.appState.currentUser = userObj;
-                    setLocalStorage('current_user', userObj);
-                    window.appState.activeTab = 'dashboard';
-                    window.showToast(`Welcome back, ${userObj.username}!`);
-                    window.render();
-                } else {
-                    window.showToast('Invalid password. Please try again.', 'error');
+                window.appState.authError = '';
+                const btn = form.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                try {
+                    await signInWithEmailAndPassword(auth, email, pass);
+                } catch (err) {
+                    const code = (err && err.code) || '';
+                    const msg = code === 'auth/too-many-requests' ? 'Too many attempts. Wait a few minutes or reset your password.'
+                        : code === 'auth/network-request-failed' ? 'No internet connection. Please try again.'
+                        : 'Incorrect email or password.';
+                    window.showToast(msg, 'error');
+                    btn.disabled = false;
                 }
+            };
+            document.getElementById('forgot-btn').onclick = async () => {
+                const email = document.getElementById('login-email').value.trim();
+                if (!email) { window.showToast('Type your email above first.', 'warning'); return; }
+                try { await sendPasswordResetEmail(auth, email); } catch (err) { console.warn('Reset email:', err && err.code); }
+                window.showToast('If that email has an account, a reset link has been sent.');
             };
         }
 
@@ -564,7 +527,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 </button>
 
                                 <button onclick="switchTab('users')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'users' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
-                                    <span class="flex items-center space-x-3"><i class="fa-solid fa-users-gear w-5"></i><span>User & Passwords</span></span>
+                                    <span class="flex items-center space-x-3"><i class="fa-solid fa-users-gear w-5"></i><span>Users & Access</span></span>
                                     ${user.role === 'Admin' ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">Admin</span>' : ''}
                                 </button>
                             </nav>
@@ -609,9 +572,13 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             window.render();
         };
 
-        window.logout = function() {
+        window.logout = async function() {
+            stopListeners();
+            try { await signOut(auth); } catch (e) { console.warn('Sign out:', e); }
+            ['invoices', 'suppliers', 'users'].forEach(k => localStorage.removeItem('majani_' + k));
             window.appState.currentUser = null;
-            localStorage.removeItem('majani_current_user');
+            window.appState.invoices = [];
+            window.appState.users = [];
             window.render();
         };
 
@@ -658,6 +625,11 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 queueTitle = "Active System Workflows (Admin View)";
                 queueSubtitle = "All in-progress invoices across all departments";
             }
+
+            // oldest-waiting first
+            filteredInvoices.sort((a, b) => (daysAtStage(b) ?? -1) - (daysAtStage(a) ?? -1));
+            const dashSuppliers = [...new Set(filteredInvoices.map(i => i.supplierName))].sort((a, b) => String(a).localeCompare(String(b)));
+            const f = window.appState.dashFilter;
 
             const totalActive = invoices.filter(i => i.currentStage !== STAGES.COMPLETED).length;
             const totalCompleted = invoices.filter(i => i.currentStage === STAGES.COMPLETED).length;
@@ -712,6 +684,22 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             </div>
                         </div>
 
+                        ${filteredInvoices.length > 0 ? `
+                            <div class="px-6 py-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center gap-3">
+                                <input id="dash-q" type="search" value="${escapeHtml(f.q)}" oninput="setDashFilter()" placeholder="Search invoice number, supplier or description" class="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <select id="dash-supplier" onchange="setDashFilter()" class="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium">
+                                    <option value="">All suppliers</option>
+                                    ${dashSuppliers.map(n => `<option value="${escapeHtml(n)}" ${n === f.supplier ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+                                </select>
+                                ${user.role === 'Admin' ? `
+                                    <select id="dash-stage" onchange="setDashFilter()" class="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium">
+                                        <option value="">All stages</option>
+                                        ${Object.values(STAGES).filter(st => st !== STAGES.COMPLETED).map(st => `<option value="${escapeHtml(st)}" ${st === f.stage ? 'selected' : ''}>${escapeHtml(st)}</option>`).join('')}
+                                    </select>` : ''}
+                                <span id="dash-count" class="text-xs font-semibold text-slate-500 whitespace-nowrap"></span>
+                            </div>
+                        ` : ''}
+
                         ${filteredInvoices.length === 0 ? `
                             <div class="p-12 text-center">
                                 <div class="w-16 h-16 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center text-2xl mx-auto mb-3">
@@ -722,7 +710,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             </div>
                         ` : `
                             <div class="overflow-x-auto">
-                                <table class="w-full text-left border-collapse">
+                                <table id="dash-table" class="w-full text-left border-collapse">
                                     <thead>
                                         <tr class="bg-slate-50/70 border-b border-slate-200 text-slate-600 text-xs uppercase tracking-wider font-semibold">
                                             <th class="p-4">Invoice #</th>
@@ -735,25 +723,27 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                     </thead>
                                     <tbody class="divide-y divide-slate-100 text-sm">
                                         ${filteredInvoices.map(inv => `
-                                            <tr class="hover:bg-slate-50/50 transition">
-                                                <td class="p-4 font-bold text-slate-800">${inv.invoiceNumber}</td>
-                                                <td class="p-4 font-medium text-slate-700">${inv.supplierName}</td>
+                                            <tr class="hover:bg-slate-50/50 transition" data-search="${escapeHtml((inv.invoiceNumber + ' ' + inv.supplierName + ' ' + (inv.description || '')).toLowerCase())}" data-supplier="${escapeHtml(inv.supplierName)}" data-stage="${escapeHtml(inv.currentStage)}">
+                                                <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}</td>
+                                                <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
                                                 <td class="p-4">
-                                                    <div class="font-semibold text-slate-800">${inv.amount || 'N/A'}</div>
-                                                    <div class="text-xs text-slate-400 truncate max-w-xs">${inv.description || 'No description'}</div>
+                                                    <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
+                                                    <div class="text-xs text-slate-400 truncate max-w-xs">${escapeHtml(inv.description || 'No description')}</div>
+                                                    ${inv.returnNote ? `<div class="text-xs text-rose-600 font-semibold mt-1">Returned: ${escapeHtml(inv.returnNote)}</div>` : ''}
                                                 </td>
                                                 <td class="p-4">
                                                     <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getStageBadgeClass(inv.currentStage)}">
                                                         ${inv.currentStage}
                                                     </span>
+                                                    ${ageBadge(inv)}
                                                 </td>
                                                 <td class="p-4">
                                                     <div class="space-y-1">
                                                         ${inv.history.map(h => `
                                                             <div class="text-[11px] text-slate-500 flex items-center space-x-1">
                                                                 <i class="fa-solid fa-check text-emerald-600 text-[10px]"></i>
-                                                                <span class="font-semibold text-slate-700">${h.user}</span>: <span>${h.action}</span>
-                                                                <span class="text-slate-400">(${h.timestamp})</span>
+                                                                <span class="font-semibold text-slate-700">${escapeHtml(h.user)}</span>: <span>${escapeHtml(h.action)}</span>
+                                                                <span class="text-slate-400">(${escapeHtml(h.timestamp)})</span>
                                                             </div>
                                                         `).join('')}
                                                     </div>
@@ -805,6 +795,16 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 `;
             }
 
+            const canEdit = (user.role === 'Admin' && inv.currentStage !== STAGES.COMPLETED) ||
+                (user.role === 'Main Store' && (inv.currentStage === STAGES.STORE || inv.currentStage === STAGES.INCOMPLETE));
+            if (canEdit) {
+                buttons += `
+                    <button onclick="editInvoice('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5" title="Correct the invoice details">
+                        <i class="fa-solid fa-pen"></i><span>Edit</span>
+                    </button>
+                `;
+            }
+
             if ((user.role === 'Main Store' || user.role === 'Admin') && inv.currentStage === STAGES.STORE) {
                 buttons += `
                     <button onclick="markInvoiceIncomplete('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5" title="Move to the Incomplete Invoices section">
@@ -813,7 +813,11 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 `;
             }
 
-            if (user.role === 'Admin' && inv.currentStage !== STAGES.STORE) {
+            const canReturnBtn = (user.role === 'Admin' && inv.currentStage !== STAGES.STORE) ||
+                (user.role === 'Procurement' && inv.currentStage === STAGES.PROCUREMENT) ||
+                (user.role === 'Billing' && inv.currentStage === STAGES.BILLING) ||
+                (user.role === 'Filing' && inv.currentStage === STAGES.FILING);
+            if (canReturnBtn) {
                 buttons += `
                     <button onclick="returnInvoice('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5" title="Return to previous stage">
                         <i class="fa-solid fa-arrow-rotate-left"></i><span>Return</span>
@@ -860,7 +864,12 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Amount (Optional)</label>
-                                <input type="text" id="inv-amount" placeholder="e.g. 50,000 KES" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <div class="flex gap-2">
+                                    <select id="inv-currency" class="px-3 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                        <option>KES</option><option>USD</option><option>EUR</option><option>GBP</option>
+                                    </select>
+                                    <input type="number" id="inv-amount" min="0" step="0.01" placeholder="e.g. 50000" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Description / Items</label>
@@ -934,10 +943,10 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 <tbody class="divide-y divide-slate-100 text-sm">
                                     ${completed.map(inv => `
                                         <tr class="hover:bg-slate-50/50 transition">
-                                            <td class="p-4 font-bold text-slate-800">${inv.invoiceNumber}</td>
-                                            <td class="p-4 font-medium text-slate-700">${inv.supplierName}</td>
+                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}</td>
+                                            <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
                                             <td class="p-4">
-                                                <div class="font-semibold text-slate-800">${inv.amount || 'N/A'}</div>
+                                                <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
                                                 <div class="text-xs text-slate-400">${inv.description || 'N/A'}</div>
                                             </td>
                                             <td class="p-4">
@@ -1003,7 +1012,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                                 <i class="fa-solid fa-truck"></i>
                                             </div>
                                             <div>
-                                                <h4 class="font-bold text-slate-800 text-sm">${sup}</h4>
+                                                <h4 class="font-bold text-slate-800 text-sm">${escapeHtml(sup)}</h4>
                                                 <span class="text-[10px] text-slate-400">Majani Mingi Registered Supplier</span>
                                             </div>
                                         </div>
@@ -1029,74 +1038,81 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
         // 5. USER & PASSWORD MANAGEMENT TAB
         function renderUsersManagementTab() {
             const users = window.appState.users;
-            const currentUser = window.appState.currentUser;
-            const isAdmin = currentUser.role === 'Admin';
+            const me = window.appState.currentUser;
+            const isAdmin = me.role === 'Admin';
+            const legacy = window.appState.legacyUserDocs || 0;
+            const roleOptions = (sel) => ROLES.map(r => `<option value="${r}" ${r === sel ? 'selected' : ''}>${r}</option>`).join('');
 
             return `
                 <div class="max-w-4xl mx-auto space-y-6">
-                    <!-- Change Own Password Card -->
                     <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
                         <div class="flex items-center space-x-3 mb-4 pb-3 border-b border-slate-100">
-                            <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-lg font-bold">
-                                <i class="fa-solid fa-key"></i>
-                            </div>
+                            <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-lg font-bold"><i class="fa-solid fa-key"></i></div>
                             <div>
                                 <h3 class="font-bold text-slate-900 text-base">Change My Password</h3>
-                                <p class="text-xs text-slate-500">Update your account login password</p>
+                                <p class="text-xs text-slate-500">Signed in as ${escapeHtml(me.email || me.username)}. Use at least 8 characters.</p>
                             </div>
                         </div>
-
                         <form id="change-own-pass-form" class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">New Password</label>
-                                <input type="password" id="my-new-pass" required placeholder="Enter new password" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <input type="password" id="my-new-pass" required autocomplete="new-password" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Confirm Password</label>
-                                <input type="password" id="my-confirm-pass" required placeholder="Confirm password" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <input type="password" id="my-confirm-pass" required autocomplete="new-password" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             </div>
-                            <button type="submit" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-md transition">
-                                Update Password
-                            </button>
+                            <button type="submit" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-md transition">Update Password</button>
                         </form>
                     </div>
 
-                    <!-- Admin User Management Panel -->
                     ${isAdmin ? `
-                        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div class="p-6 border-b border-slate-100 flex items-center justify-between">
-                                <div>
-                                    <h3 class="font-bold text-slate-900 text-base">Admin User & Password Management</h3>
-                                    <p class="text-xs text-slate-500 mt-0.5">As Admin, you can reset or change passwords for any user in the system.</p>
-                                </div>
-                                <span class="px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-bold border border-amber-200">
-                                    Admin Level Access
-                                </span>
+                        ${legacy > 0 ? `
+                            <div class="bg-rose-50 border border-rose-200 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <p class="text-xs text-rose-800"><b>${legacy} old account record${legacy === 1 ? '' : 's'} with plain-text passwords</b> from the previous version still exist in the database. Delete them now.</p>
+                                <button onclick="deleteLegacyUsers()" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl whitespace-nowrap">Delete old records</button>
                             </div>
+                        ` : ''}
 
+                        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                            <h3 class="font-bold text-slate-900 text-base mb-1">Add a User</h3>
+                            <p class="text-xs text-slate-500 mb-4">Creates a login. Give the person the temporary password; they can change it after signing in, or use "Forgot password".</p>
+                            <form id="add-user-form" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <input type="text" id="new-user-name" required placeholder="Name (e.g. Alimah)" class="px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <input type="email" id="new-user-email" required placeholder="Email" class="px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <select id="new-user-role" class="px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">${roleOptions('Main Store')}</select>
+                                <input type="text" id="new-user-pass" required minlength="8" placeholder="Temporary password (8+ characters)" class="px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <button type="submit" class="sm:col-span-2 px-5 py-2.5 bg-slate-900 hover:bg-emerald-600 text-white font-semibold text-sm rounded-xl transition">Create User</button>
+                            </form>
+                        </div>
+
+                        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="p-6 border-b border-slate-100">
+                                <h3 class="font-bold text-slate-900 text-base">Users &amp; Roles</h3>
+                                <p class="text-xs text-slate-500 mt-0.5">Change a role, send a password reset email, or remove access.</p>
+                            </div>
                             <div class="divide-y divide-slate-100">
-                                ${users.map(u => `
-                                    <div class="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50/50 transition">
-                                        <div class="flex items-center space-x-3">
-                                            <div class="w-10 h-10 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-lg border">
-                                                ${u.avatar}
-                                            </div>
-                                            <div>
-                                                <h4 class="font-bold text-slate-800 text-sm">${u.username} <span class="text-xs font-normal text-slate-500">(${u.role})</span></h4>
-                                                <p class="text-xs text-slate-400">Current Password: <span class="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-semibold">${u.pin}</span></p>
+                                ${users.length === 0 ? '<div class="p-6 text-xs text-slate-400">No users yet.</div>' : users.map(u => `
+                                    <div class="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                                        <div class="flex items-center space-x-3 min-w-0">
+                                            <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-lg border">${escapeHtml(u.avatar || ROLE_AVATARS[u.role] || '')}</div>
+                                            <div class="min-w-0">
+                                                <h4 class="font-bold text-slate-800 text-sm truncate">${escapeHtml(u.username)}${u.id === me.id ? ' <span class="text-xs font-normal text-emerald-600">(you)</span>' : ''}</h4>
+                                                <p class="text-xs text-slate-400 truncate">${escapeHtml(u.email || '')}</p>
                                             </div>
                                         </div>
-
-                                        <button onclick="adminResetPassword('${u.id}', '${u.username}')" class="px-4 py-2 bg-slate-900 hover:bg-emerald-600 text-white text-xs font-semibold rounded-xl transition shadow-sm inline-flex items-center space-x-1.5">
-                                            <i class="fa-solid fa-arrows-rotate"></i><span>Reset Password</span>
-                                        </button>
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <select ${u.id === me.id ? 'disabled' : ''} onchange="changeUserRole('${u.id}', this.value)" class="px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold">${roleOptions(u.role)}</select>
+                                            <button onclick="sendResetEmail('${escapeHtml(u.email || '')}')" class="px-3 py-2 bg-slate-900 hover:bg-emerald-600 text-white text-xs font-semibold rounded-xl transition">Send reset email</button>
+                                            ${u.id === me.id ? '' : `<button onclick="removeUserAccess('${u.id}', '${escapeHtml(u.username)}')" class="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold rounded-xl transition">Remove access</button>`}
+                                        </div>
                                     </div>
                                 `).join('')}
                             </div>
                         </div>
                     ` : `
                         <div class="p-6 bg-slate-100 rounded-2xl border border-slate-200 text-xs text-slate-500 text-center">
-                            Note: Admin privileges are required to change passwords for other accounts.
+                            Only the Admin can add users or change roles.
                         </div>
                     `}
                 </div>
@@ -1143,9 +1159,11 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
 
             window.showConfirmationModal(
                 'Confirm Invoice Submission',
-                `Are you sure you want to submit invoice #${inv.invoiceNumber} to ${nextStage}?`,
+                `Are you sure you want to submit invoice #${escapeHtml(inv.invoiceNumber)} to ${nextStage}?`,
                 async () => {
                     inv.currentStage = nextStage;
+                    inv.stageSince = new Date().toISOString();
+                    inv.returnNote = '';
                     inv.history.push({
                         stage: nextStage === STAGES.COMPLETED ? STAGES.FILING : nextStage,
                         user: user.username,
@@ -1154,7 +1172,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     });
 
                     await window.saveInvoiceToCloud(inv);
-                    window.showToast(`Invoice #${inv.invoiceNumber} submitted successfully!`);
+                    window.showToast(`Invoice #${escapeHtml(inv.invoiceNumber)} submitted successfully!`);
                     window.render();
                 }
             );
@@ -1162,14 +1180,17 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
 
         window.returnInvoice = function(id) {
             const user = window.appState.currentUser;
-            if (user.role !== 'Admin') {
-                window.showToast('Only Admin can return an invoice to the previous step.', 'error');
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv) return;
+
+            const canReturn = user.role === 'Admin' ||
+                (user.role === 'Procurement' && inv.currentStage === STAGES.PROCUREMENT) ||
+                (user.role === 'Billing' && inv.currentStage === STAGES.BILLING) ||
+                (user.role === 'Filing' && inv.currentStage === STAGES.FILING);
+            if (!canReturn) {
+                window.showToast('You cannot return this invoice.', 'error');
                 return;
             }
-
-            const invoices = window.appState.invoices;
-            const inv = invoices.find(i => i.id === id);
-            if (!inv) return;
 
             let prevStage = '';
             if (inv.currentStage === STAGES.INCOMPLETE) prevStage = STAGES.STORE;
@@ -1177,23 +1198,31 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             else if (inv.currentStage === STAGES.BILLING) prevStage = STAGES.PROCUREMENT;
             else if (inv.currentStage === STAGES.FILING) prevStage = STAGES.BILLING;
             else if (inv.currentStage === STAGES.COMPLETED) prevStage = STAGES.FILING;
+            if (!prevStage) return;
+
+            const reason = prompt(`Why are you returning invoice #${inv.invoiceNumber} to ${prevStage}? (required)`, '');
+            if (reason === null) return;
+            if (!reason.trim()) { window.showToast('A reason is required to return an invoice.', 'warning'); return; }
 
             window.showConfirmationModal(
                 'Return Invoice to Previous Step',
-                `Are you sure you want to return invoice #${inv.invoiceNumber} back to ${prevStage}?`,
+                `Return invoice #${escapeHtml(inv.invoiceNumber)} to <b>${escapeHtml(prevStage)}</b>?<br><span class="text-xs text-slate-500">Reason: ${escapeHtml(reason.trim())}</span>`,
                 async () => {
                     inv.currentStage = prevStage;
+                    inv.stageSince = new Date().toISOString();
+                    inv.returnNote = reason.trim();
                     inv.history.push({
                         stage: prevStage,
                         user: user.username,
                         timestamp: getCurrentTimestamp(),
-                        action: `Returned by Admin to ${prevStage}`
+                        action: `Returned to ${prevStage}: ${reason.trim()}`
                     });
-
                     await window.saveInvoiceToCloud(inv);
-                    window.showToast(`Invoice #${inv.invoiceNumber} returned to ${prevStage}.`, 'warning');
+                    window.showToast(`Invoice #${escapeHtml(inv.invoiceNumber)} returned to ${escapeHtml(prevStage)}.`, 'warning');
                     window.render();
-                }
+                },
+                'Return Invoice',
+                true
             );
         };
 
@@ -1217,8 +1246,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     const matches = suppliers.filter(s => s.toLowerCase().includes(query));
                     if (matches.length > 0) {
                         suggestionsBox.innerHTML = matches.map(m => `
-                            <div class="px-4 py-2.5 hover:bg-emerald-50 cursor-pointer text-sm font-medium text-slate-700 border-b border-slate-100 last:border-0" onclick="selectSupplier('${m}')">
-                                ${m}
+                            <div class="px-4 py-2.5 hover:bg-emerald-50 cursor-pointer text-sm font-medium text-slate-700 border-b border-slate-100 last:border-0" data-name="${escapeHtml(m)}" onclick="selectSupplier(this.dataset.name)">
+                                ${escapeHtml(m)}
                             </div>
                         `).join('');
                         suggestionsBox.classList.remove('hidden');
@@ -1258,7 +1287,9 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     const invoiceNumber = document.getElementById('inv-number').value.trim();
                     const dateReceived = document.getElementById('inv-date').value;
                     const supplierName = supplierInput.value.trim();
-                    const amount = document.getElementById('inv-amount').value.trim();
+                    const amountNum = parseFloat(document.getElementById('inv-amount').value);
+                    const currency = document.getElementById('inv-currency').value;
+                    const amount = isNaN(amountNum) ? '' : formatMoney(amountNum, currency);
                     const description = document.getElementById('inv-desc').value.trim();
                     const asIncomplete = !!(e.submitter && e.submitter.dataset && e.submitter.dataset.mode === 'incomplete');
                     const incompleteNote = document.getElementById('inv-incomplete-note').value.trim();
@@ -1298,8 +1329,11 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 invoiceNumber,
                                 supplierName,
                                 amount,
+                                amountValue: isNaN(amountNum) ? null : amountNum,
+                                currency: currency,
                                 description,
                                 currentStage: asIncomplete ? STAGES.INCOMPLETE : STAGES.PROCUREMENT,
+                                stageSince: new Date().toISOString(),
                                 incompleteNote: asIncomplete ? incompleteNote : '',
                                 history: [
                                     {
@@ -1331,15 +1365,31 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                         e.preventDefault();
                         const p1 = document.getElementById('my-new-pass').value;
                         const p2 = document.getElementById('my-confirm-pass').value;
-
-                        if (p1 !== p2) {
-                            window.showToast('Passwords do not match.', 'error');
-                            return;
+                        if (p1.length < 8) { window.showToast('Use at least 8 characters.', 'error'); return; }
+                        if (p1 !== p2) { window.showToast('Passwords do not match.', 'error'); return; }
+                        try {
+                            await updatePassword(auth.currentUser, p1);
+                            window.showToast('Password updated successfully!');
+                            passForm.reset();
+                        } catch (err) {
+                            const msg = err && err.code === 'auth/requires-recent-login'
+                                ? 'For security, sign out and sign in again, then change your password.'
+                                : 'Could not update password (' + ((err && err.code) || 'error') + ').';
+                            window.showToast(msg, 'error');
                         }
-
-                        await window.updateUserPinInCloud(user.id, p1);
-                        window.showToast('Password updated successfully!');
-                        window.render();
+                    };
+                }
+                const addForm = document.getElementById('add-user-form');
+                if (addForm) {
+                    addForm.onsubmit = async (e) => {
+                        e.preventDefault();
+                        const ok = await window.adminCreateUser({
+                            name: document.getElementById('new-user-name').value.trim(),
+                            email: document.getElementById('new-user-email').value.trim(),
+                            role: document.getElementById('new-user-role').value,
+                            pass: document.getElementById('new-user-pass').value
+                        });
+                        if (ok) { window.showToast('User created.'); addForm.reset(); }
                     };
                 }
             }
@@ -1367,13 +1417,100 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             window.showToast('Supplier added!');
         };
 
-        window.adminResetPassword = function(userId, username) {
-            const newPin = prompt(`Enter new password for account "${username}":`);
-            if (newPin && newPin.trim() !== '') {
-                window.updateUserPinInCloud(userId, newPin.trim());
-                window.showToast(`Password for ${username} updated to "${newPin.trim()}"!`);
+        window.adminCreateUser = async function({ name, email, role, pass }) {
+            // A second, temporary Firebase app so creating the account does not sign the Admin out
+            const secondary = initializeApp(firebaseConfig, 'secondary-' + Date.now());
+            try {
+                const sAuth = getAuth(secondary);
+                const cred = await createUserWithEmailAndPassword(sAuth, email, pass);
+                await setDoc(doc(db, ...dataPath, 'users', cred.user.uid), {
+                    uid: cred.user.uid, username: name, email: email, role: role, avatar: ROLE_AVATARS[role] || ''
+                });
+                await signOut(sAuth);
+                return true;
+            } catch (err) {
+                const code = (err && err.code) || '';
+                const msg = code === 'auth/email-already-in-use' ? 'That email already has an account.'
+                    : code === 'auth/weak-password' ? 'Password is too weak (use 8+ characters).'
+                    : code === 'auth/operation-not-allowed' ? 'Enable Email/Password sign-in in Firebase Authentication first.'
+                    : code === 'permission-denied' ? 'Not allowed. Check the Firestore rules.'
+                    : 'Could not create user (' + (code || 'error') + ').';
+                window.showToast(msg, 'error');
+                return false;
+            } finally {
+                try { await deleteApp(secondary); } catch (e) {}
             }
         };
+
+        window.changeUserRole = async function(uid, role) {
+            if (window.appState.currentUser.role !== 'Admin' || !ROLES.includes(role)) return;
+            try {
+                await updateDoc(doc(db, ...dataPath, 'users', uid), { role, avatar: ROLE_AVATARS[role] || '' });
+                window.showToast('Role updated.');
+            } catch (e) {
+                window.showToast('Could not change role (' + (e.code || 'error') + ').', 'error');
+            }
+        };
+
+        window.sendResetEmail = async function(email) {
+            if (!email) { window.showToast('This user has no email on record.', 'warning'); return; }
+            try { await sendPasswordResetEmail(auth, email); window.showToast('Password reset email sent to ' + email + '.'); }
+            catch (e) { window.showToast('Could not send reset email (' + (e.code || 'error') + ').', 'error'); }
+        };
+
+        window.removeUserAccess = function(uid, name) {
+            window.showConfirmationModal(
+                'Remove Access',
+                `Remove ${escapeHtml(name)}'s access to the system? They will be signed out and unable to use the app. (Their login can also be deleted in Firebase Console, Authentication.)`,
+                async () => {
+                    try {
+                        await deleteDoc(doc(db, ...dataPath, 'users', uid));
+                        window.showToast('Access removed.', 'warning');
+                    } catch (e) {
+                        window.showToast('Could not remove access (' + (e.code || 'error') + ').', 'error');
+                    }
+                },
+                'Remove Access',
+                true
+            );
+        };
+
+        window.deleteLegacyUsers = async function() {
+            try {
+                const snap = await getDocs(collection(db, ...dataPath, 'users'));
+                let n = 0;
+                for (const d of snap.docs) {
+                    if (!d.data().uid) { await deleteDoc(d.ref); n++; }
+                }
+                window.showToast(`Deleted ${n} old record${n === 1 ? '' : 's'}.`);
+            } catch (e) {
+                window.showToast('Could not delete old records (' + (e.code || 'error') + ').', 'error');
+            }
+        };
+
+        // --- MONEY & AGEING HELPERS ---
+        function formatMoney(n, cur) {
+            return `${cur || 'KES'} ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        function daysAtStage(inv) {
+            let t = inv.stageSince ? Date.parse(inv.stageSince) : NaN;
+            if (isNaN(t)) {
+                const h = inv.history && inv.history[inv.history.length - 1];
+                if (h && h.timestamp) {
+                    const m = String(h.timestamp).match(/\(([^)]*)\)/);
+                    t = Date.parse(m ? m[1] : h.timestamp);
+                }
+            }
+            if (isNaN(t)) return null;
+            return Math.max(0, Math.floor((Date.now() - t) / 86400000));
+        }
+        function ageBadge(inv) {
+            if (inv.currentStage === STAGES.COMPLETED) return '';
+            const d = daysAtStage(inv);
+            if (d === null) return '';
+            const cls = d >= 7 ? 'bg-rose-50 text-rose-700 border-rose-200' : d >= 3 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-50 text-slate-500 border-slate-200';
+            return `<div class="mt-1.5"><span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border ${cls}"><i class="fa-regular fa-clock mr-1"></i>${d === 0 ? 'Today' : d + (d === 1 ? ' day' : ' days')} at this stage</span></div>`;
+        }
 
         // --- DUPLICATE CHECK ---
         function escapeHtml(str) {
@@ -1385,12 +1522,12 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             return m ? parseFloat(m[0]) : null;
         }
         // exact = same invoice number + supplier + amount; partial = same number + supplier, different amount
-        window.findDuplicateInvoices = function(invoiceNumber, supplierName, amount) {
+        window.findDuplicateInvoices = function(invoiceNumber, supplierName, amount, excludeId) {
             const n = normInvoiceNo(invoiceNumber);
             const sup = String(supplierName || '').trim().toLowerCase();
             if (!n || !sup) return { exact: [], partial: [] };
             const a = normAmount(amount);
-            const same = window.appState.invoices.filter(i =>
+            const same = window.appState.invoices.filter(i => i.id !== excludeId &&
                 normInvoiceNo(i.invoiceNumber) === n && String(i.supplierName || '').trim().toLowerCase() === sup);
             const exact = same.filter(i => normAmount(i.amount) === a);
             return { exact, partial: same.filter(i => !exact.includes(i)) };
@@ -1503,13 +1640,13 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 t = t.replace(/"/g, '""');
                 return /[",\n\r]/.test(t) ? '"' + t + '"' : t;
             };
-            const header = ['Invoice Number', 'Supplier', 'Amount', 'Description', 'Current Stage', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Incomplete Note', 'Full History'];
+            const header = ['Invoice Number', 'Supplier', 'Amount', 'Amount (number)', 'Description', 'Current Stage', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Incomplete Note', 'Full History'];
             const rows = list.map(i => {
                 const h = i.history || [];
                 const first = h[0] || {};
                 const last = h[h.length - 1] || {};
                 return [
-                    i.invoiceNumber, i.supplierName, i.amount, i.description, i.currentStage,
+                    i.invoiceNumber, i.supplierName, i.amount, (i.amountValue != null ? i.amountValue : normAmount(i.amount)), i.description, i.currentStage,
                     first.timestamp, first.user, last.action, last.user, last.timestamp, i.incompleteNote,
                     h.map(x => `${x.stage} - ${x.user} - ${x.timestamp} - ${x.action}`).join(' | ')
                 ];
@@ -1541,13 +1678,14 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             }
             const inv = window.appState.invoices.find(i => i.id === id);
             if (!inv || inv.currentStage !== STAGES.STORE) return;
-            const note = prompt(`What is missing or incomplete on invoice #${inv.invoiceNumber}? (e.g. no delivery note, missing LPO)`, '');
+            const note = prompt(`What is missing or incomplete on invoice #${escapeHtml(inv.invoiceNumber)}? (e.g. no delivery note, missing LPO)`, '');
             if (note === null) return;
             window.showConfirmationModal(
                 'Mark Invoice Incomplete',
                 `Move invoice #${escapeHtml(inv.invoiceNumber)} to the Incomplete Invoices section? Alimah and Sharon will both be able to see and submit it from there.`,
                 async () => {
                     inv.currentStage = STAGES.INCOMPLETE;
+                    inv.stageSince = new Date().toISOString();
                     inv.incompleteNote = note.trim();
                     inv.history.push({
                         stage: STAGES.INCOMPLETE,
@@ -1556,7 +1694,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                         action: 'Marked Incomplete' + (note.trim() ? ': ' + note.trim() : '')
                     });
                     await window.saveInvoiceToCloud(inv);
-                    window.showToast(`Invoice #${inv.invoiceNumber} moved to Incomplete Invoices.`, 'warning');
+                    window.showToast(`Invoice #${escapeHtml(inv.invoiceNumber)} moved to Incomplete Invoices.`, 'warning');
                     window.render();
                 },
                 'Mark Incomplete',
@@ -1616,7 +1754,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                                 <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
                                                 <div class="text-xs text-slate-400 truncate max-w-xs">${escapeHtml(inv.description || 'No description')}</div>
                                             </td>
-                                            <td class="p-4 text-xs text-rose-700 max-w-xs">${inv.incompleteNote ? escapeHtml(inv.incompleteNote) : '<span class="text-slate-400">No note given</span>'}</td>
+                                            <td class="p-4 text-xs text-rose-700 max-w-xs">${inv.incompleteNote ? escapeHtml(inv.incompleteNote) : '<span class="text-slate-400">No note given</span>'}${ageBadge(inv)}</td>
                                             <td class="p-4">
                                                 <div class="space-y-1">
                                                     ${inv.history.map(h => `
@@ -1637,6 +1775,128 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 </div>
             `;
         }
+
+        // --- EDIT INVOICE ---
+        window.editInvoice = function(id) {
+            const user = window.appState.currentUser;
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv) return;
+            const allowed = (user.role === 'Admin' && inv.currentStage !== STAGES.COMPLETED) ||
+                (user.role === 'Main Store' && (inv.currentStage === STAGES.STORE || inv.currentStage === STAGES.INCOMPLETE));
+            if (!allowed) { window.showToast('You cannot edit this invoice at its current stage.', 'error'); return; }
+
+            const cur = inv.currency || 'KES';
+            const parsed = inv.amountValue != null ? inv.amountValue : normAmount(inv.amount);
+            const isInc = inv.currentStage === STAGES.INCOMPLETE;
+            const mc = document.getElementById('modal-container');
+            const field = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500';
+            mc.innerHTML = `
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+                    <form id="edit-inv-form" class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-100 space-y-4 max-h-[90vh] overflow-y-auto">
+                        <h3 class="text-lg font-bold text-slate-900">Edit Invoice</h3>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Invoice Number</label>
+                            <input id="edit-number" required value="${escapeHtml(inv.invoiceNumber)}" class="${field}">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Supplier</label>
+                            <input id="edit-supplier" required list="edit-supplier-list" value="${escapeHtml(inv.supplierName)}" class="${field}">
+                            <datalist id="edit-supplier-list">${window.appState.suppliers.map(n => `<option value="${escapeHtml(n)}">`).join('')}</datalist>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Amount</label>
+                            <div class="flex gap-2">
+                                <select id="edit-currency" class="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold">
+                                    ${['KES', 'USD', 'EUR', 'GBP'].map(c => `<option ${c === cur ? 'selected' : ''}>${c}</option>`).join('')}
+                                </select>
+                                <input id="edit-amount" type="number" min="0" step="0.01" value="${parsed == null ? '' : parsed}" class="${field}">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Description / Items</label>
+                            <input id="edit-desc" value="${escapeHtml(inv.description || '')}" class="${field}">
+                        </div>
+                        ${isInc ? `
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">What is missing?</label>
+                                <input id="edit-note" value="${escapeHtml(inv.incompleteNote || '')}" class="${field}">
+                            </div>` : ''}
+                        <div class="flex justify-end space-x-3 pt-2">
+                            <button type="button" id="edit-cancel" class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20">Save Changes</button>
+                        </div>
+                    </form>
+                </div>`;
+            document.getElementById('edit-cancel').onclick = () => { mc.innerHTML = ''; };
+            document.getElementById('edit-inv-form').onsubmit = async (e) => {
+                e.preventDefault();
+                const num = document.getElementById('edit-number').value.trim();
+                const sup = document.getElementById('edit-supplier').value.trim();
+                const curNew = document.getElementById('edit-currency').value;
+                const amtNum = parseFloat(document.getElementById('edit-amount').value);
+                const desc = document.getElementById('edit-desc').value.trim();
+                const noteEl = document.getElementById('edit-note');
+                const note = noteEl ? noteEl.value.trim() : (inv.incompleteNote || '');
+                if (!num || !sup) { window.showToast('Invoice number and supplier are required.', 'error'); return; }
+                const amountStr = isNaN(amtNum) ? '' : formatMoney(amtNum, curNew);
+
+                const changes = [];
+                if (num !== inv.invoiceNumber) changes.push(`number ${inv.invoiceNumber} to ${num}`);
+                if (sup !== inv.supplierName) changes.push(`supplier ${inv.supplierName} to ${sup}`);
+                if (amountStr !== (inv.amount || '')) changes.push(`amount ${inv.amount || 'none'} to ${amountStr || 'none'}`);
+                if (desc !== (inv.description || '')) changes.push('description');
+                if (note !== (inv.incompleteNote || '')) changes.push('missing-details note');
+                if (changes.length === 0) { mc.innerHTML = ''; return; }
+
+                const d = window.findDuplicateInvoices(num, sup, amountStr, inv.id);
+                if (d.exact.length > 0 && !confirm('Another invoice already has this same number, supplier and amount. Save anyway?')) return;
+
+                inv.invoiceNumber = num;
+                inv.supplierName = sup;
+                inv.amount = amountStr;
+                inv.amountValue = isNaN(amtNum) ? null : amtNum;
+                inv.currency = curNew;
+                inv.description = desc;
+                if (noteEl) inv.incompleteNote = note;
+                inv.history.push({
+                    stage: inv.currentStage,
+                    user: user.username,
+                    timestamp: getCurrentTimestamp(),
+                    action: 'Edited: ' + changes.join('; ')
+                });
+                if (!window.appState.suppliers.some(x => x.toLowerCase() === sup.toLowerCase())) {
+                    await window.saveSupplierToCloud(sup);
+                }
+                await window.saveInvoiceToCloud(inv);
+                mc.innerHTML = '';
+                window.showToast('Invoice updated.');
+                window.render();
+            };
+        };
+
+        // --- DASHBOARD SEARCH / FILTER ---
+        window.applyDashFilter = function() {
+            const table = document.getElementById('dash-table');
+            const f = window.appState.dashFilter;
+            if (!table) return;
+            const q = (f.q || '').trim().toLowerCase();
+            let shown = 0, total = 0;
+            table.querySelectorAll('tbody tr').forEach(tr => {
+                total++;
+                const ok = (!q || (tr.dataset.search || '').includes(q)) &&
+                    (!f.supplier || tr.dataset.supplier === f.supplier) &&
+                    (!f.stage || tr.dataset.stage === f.stage);
+                tr.style.display = ok ? '' : 'none';
+                if (ok) shown++;
+            });
+            const c = document.getElementById('dash-count');
+            if (c) c.textContent = (q || f.supplier || f.stage) ? `Showing ${shown} of ${total}` : `${total} invoice${total === 1 ? '' : 's'}`;
+        };
+        window.setDashFilter = function() {
+            const g = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+            window.appState.dashFilter = { q: g('dash-q'), supplier: g('dash-supplier'), stage: g('dash-stage') };
+            window.applyDashFilter();
+        };
 
         // --- SUPPLIER EDIT / DELETE ---
         async function findSupplierDocs(name) {
@@ -1707,6 +1967,45 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 }
             );
         };
+
+        // --- AUTH STATE ---
+        if (isFirebaseActive) {
+            onAuthStateChanged(auth, async (fbUser) => {
+                window.appState.authReady = true;
+                if (!fbUser) {
+                    stopListeners();
+                    window.appState.currentUser = null;
+                    window.render();
+                    return;
+                }
+                if (fbUser.isAnonymous) { await signOut(auth); return; } // leftover session from the old version
+                try {
+                    const snap = await getDoc(doc(db, ...dataPath, 'users', fbUser.uid));
+                    const prof = snap.exists() ? snap.data() : null;
+                    if (!prof || !ROLES.includes(prof.role)) {
+                        window.appState.authError = 'Your login works but has no role yet. Ask the Admin to set you up.';
+                        await signOut(auth);
+                        return;
+                    }
+                    window.appState.currentUser = {
+                        id: fbUser.uid, uid: fbUser.uid, email: fbUser.email,
+                        username: prof.username || fbUser.email, role: prof.role,
+                        avatar: prof.avatar || ROLE_AVATARS[prof.role] || ''
+                    };
+                    window.appState.authError = '';
+                    window.appState.activeTab = 'dashboard';
+                    startListeners();
+                    window.render();
+                    window.showToast('Welcome, ' + window.appState.currentUser.username + '!');
+                } catch (e) {
+                    console.error('Profile load failed:', e);
+                    window.appState.authError = 'Could not load your profile (' + ((e && e.code) || 'error') + '). Check the Firestore rules.';
+                    await signOut(auth);
+                }
+            });
+        } else {
+            window.appState.authReady = true;
+        }
 
         // Initialize App
         window.render();

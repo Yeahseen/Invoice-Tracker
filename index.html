@@ -135,7 +135,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             authReady: false,
             authError: '',
             legacyUserDocs: 0,
-            dashFilter: { q: '', supplier: '', stage: '' },
+            dashFilter: { q: '', supplier: '', stage: '', kind: '' },
             activeTab: 'dashboard',
             invoices: [],
             suppliers: DEFAULT_SUPPLIERS,
@@ -158,34 +158,6 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
 
         // Initial Local Fallbacks
         if (!localStorage.getItem('majani_suppliers')) setLocalStorage('suppliers', DEFAULT_SUPPLIERS);
-        if (!localStorage.getItem('majani_invoices')) {
-            const initialInvoices = [
-                {
-                    id: 'INV-2026-001',
-                    invoiceNumber: 'MM-9942',
-                    supplierName: 'Greenfields Farm Inputs Ltd',
-                    amount: '145,000 KES',
-                    description: 'Fertilizer batch Q1',
-                    currentStage: STAGES.PROCUREMENT,
-                    history: [
-                        { stage: STAGES.STORE, user: 'Alimah', timestamp: '22 Oct 2026 08:30 AM', action: 'Added & Submitted' }
-                    ]
-                },
-                {
-                    id: 'INV-2026-002',
-                    invoiceNumber: 'MM-9943',
-                    supplierName: 'Sisal Machinery & Parts Co.',
-                    amount: '320,000 KES',
-                    description: 'Decorticator spare blades',
-                    currentStage: STAGES.BILLING,
-                    history: [
-                        { stage: STAGES.STORE, user: 'Alimah', timestamp: '22 Oct 2026 09:15 AM', action: 'Added & Submitted' },
-                        { stage: STAGES.PROCUREMENT, user: 'Sharon', timestamp: '22 Oct 2026 11:00 AM', action: 'Confirmed & Submitted' }
-                    ]
-                }
-            ];
-            setLocalStorage('invoices', initialInvoices);
-        }
 
         // Load Local initial values
         window.appState.users = [];
@@ -459,6 +431,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const completedCount = invoices.filter(i => i.currentStage === STAGES.COMPLETED).length;
             const incompleteCount = invoices.filter(i => i.currentStage === STAGES.INCOMPLETE).length;
             const canSeeIncomplete = ['Main Store', 'Procurement', 'Admin'].includes(user.role);
+            const canSeePayments = user.role === 'Filing' || user.role === 'Admin';
+            const toConfirmCount = invoices.filter(i => payState(i) === 'confirm').length;
 
             return `
                 <div class="min-h-full flex flex-col md:flex-row bg-slate-100 flex-1">
@@ -503,9 +477,16 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                     ${pendingCount > 0 ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold ${activeTab === 'dashboard' ? 'bg-white text-emerald-700' : 'bg-emerald-500/20 text-emerald-400'}">${pendingCount}</span>` : ''}
                                 </button>
 
-                                ${(user.role === 'Main Store' || user.role === 'Admin') ? `
+                                ${(user.role === 'Main Store' || user.role === 'Admin' || user.role === 'Billing') ? `
                                     <button onclick="switchTab('add')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'add' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
-                                        <i class="fa-solid fa-plus-circle w-5"></i><span>Add New Invoice</span>
+                                        <i class="fa-solid fa-plus-circle w-5"></i><span>${user.role === 'Billing' ? 'Add Direct Invoice' : 'Add New Invoice'}</span>
+                                    </button>
+                                ` : ''}
+
+                                ${canSeePayments ? `
+                                    <button onclick="switchTab('payments')" class="w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium text-sm transition ${activeTab === 'payments' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}">
+                                        <span class="flex items-center space-x-3"><i class="fa-solid fa-money-bill-wave w-5"></i><span>Payments</span></span>
+                                        ${toConfirmCount > 0 ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold ${activeTab === 'payments' ? 'bg-white text-emerald-700' : 'bg-indigo-500/20 text-indigo-300'}">${toConfirmCount}</span>` : ''}
                                     </button>
                                 ` : ''}
 
@@ -587,6 +568,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             switch (window.appState.activeTab) {
                 case 'dashboard': return renderDashboardTab();
                 case 'add': return renderAddInvoiceTab();
+                case 'payments': return renderPaymentsTab();
                 case 'incomplete': return renderIncompleteTab();
                 case 'completed': return renderCompletedTab();
                 case 'suppliers': return renderSuppliersTab();
@@ -676,9 +658,9 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 <button onclick="openExportDialog('all')" class="inline-flex items-center justify-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2.5 rounded-xl border border-slate-300 transition" title="Download every invoice (all stages) as a CSV file for Excel">
                                     <i class="fa-solid fa-file-export"></i><span>Export All</span>
                                 </button>
-                                ${user.role === 'Main Store' ? `
+                                ${(user.role === 'Main Store' || user.role === 'Billing') ? `
                                     <button onclick="switchTab('add')" class="inline-flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-md transition">
-                                        <i class="fa-solid fa-plus"></i><span>New Invoice</span>
+                                        <i class="fa-solid fa-plus"></i><span>${user.role === 'Billing' ? 'New Direct Invoice' : 'New Invoice'}</span>
                                     </button>
                                 ` : ''}
                             </div>
@@ -695,6 +677,11 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                     <select id="dash-stage" onchange="setDashFilter()" class="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium">
                                         <option value="">All stages</option>
                                         ${Object.values(STAGES).filter(st => st !== STAGES.COMPLETED).map(st => `<option value="${escapeHtml(st)}" ${st === f.stage ? 'selected' : ''}>${escapeHtml(st)}</option>`).join('')}
+                                    </select>` : ''}
+                                ${kindOptions(filteredInvoices).length > 1 || filteredInvoices.some(i => i.type === 'direct') ? `
+                                    <select id="dash-kind" onchange="setDashFilter()" class="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium">
+                                        <option value="">All types</option>
+                                        ${kindOptions(filteredInvoices).map(o => `<option value="${escapeHtml(o.value)}" ${o.value === f.kind ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
                                     </select>` : ''}
                                 <span id="dash-count" class="text-xs font-semibold text-slate-500 whitespace-nowrap"></span>
                             </div>
@@ -723,8 +710,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                     </thead>
                                     <tbody class="divide-y divide-slate-100 text-sm">
                                         ${filteredInvoices.map(inv => `
-                                            <tr class="hover:bg-slate-50/50 transition" data-search="${escapeHtml((inv.invoiceNumber + ' ' + inv.supplierName + ' ' + (inv.description || '')).toLowerCase())}" data-supplier="${escapeHtml(inv.supplierName)}" data-stage="${escapeHtml(inv.currentStage)}">
-                                                <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}</td>
+                                            <tr class="hover:bg-slate-50/50 transition" data-search="${escapeHtml((inv.invoiceNumber + ' ' + inv.supplierName + ' ' + (inv.description || '') + ' ' + (inv.category || '')).toLowerCase())}" data-supplier="${escapeHtml(inv.supplierName)}" data-stage="${escapeHtml(inv.currentStage)}" data-kind="${escapeHtml(kindOf(inv))}">
+                                                <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}${typeTag(inv)}</td>
                                                 <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
                                                 <td class="p-4">
                                                     <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
@@ -735,7 +722,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                                     <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getStageBadgeClass(inv.currentStage)}">
                                                         ${inv.currentStage}
                                                     </span>
-                                                    ${ageBadge(inv)}
+                                                    ${payBadge(inv)}${ageBadge(inv)}
                                                 </td>
                                                 <td class="p-4">
                                                     <div class="space-y-1">
@@ -782,9 +769,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 (user.role === 'Main Store' && inv.currentStage === STAGES.STORE) ||
                 (user.role === 'Procurement' && inv.currentStage === STAGES.PROCUREMENT) ||
                 (user.role === 'Billing' && inv.currentStage === STAGES.BILLING) ||
-                (user.role === 'Filing' && inv.currentStage === STAGES.FILING) ||
                 ((user.role === 'Main Store' || user.role === 'Procurement') && inv.currentStage === STAGES.INCOMPLETE) ||
-                (user.role === 'Admin')
+                (user.role === 'Admin' && inv.currentStage !== STAGES.FILING && inv.currentStage !== STAGES.COMPLETED)
             );
 
             if (canAction) {
@@ -795,7 +781,26 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 `;
             }
 
+            if (canHandlePayments() && inv.currentStage === STAGES.FILING) {
+                if (inv.filingStatus !== 'confirmed') {
+                    buttons += `
+                        <button onclick="confirmFilingReceipt('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5">
+                            <i class="fa-solid fa-inbox"></i><span>Confirm Received</span>
+                        </button>`;
+                } else {
+                    buttons += `
+                        <button onclick="openPaymentModal('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5">
+                            <i class="fa-solid fa-money-bill-wave"></i><span>Record Payment</span>
+                        </button>`;
+                }
+                if ((inv.payments || []).length > 0) {
+                    buttons += `
+                        <button onclick="openPaymentsHistory('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold shadow-sm transition">Payments</button>`;
+                }
+            }
+
             const canEdit = (user.role === 'Admin' && inv.currentStage !== STAGES.COMPLETED) ||
+                (user.role === 'Billing' && inv.type === 'direct' && inv.currentStage === STAGES.BILLING) ||
                 (user.role === 'Main Store' && (inv.currentStage === STAGES.STORE || inv.currentStage === STAGES.INCOMPLETE));
             if (canEdit) {
                 buttons += `
@@ -817,7 +822,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 (user.role === 'Procurement' && inv.currentStage === STAGES.PROCUREMENT) ||
                 (user.role === 'Billing' && inv.currentStage === STAGES.BILLING) ||
                 (user.role === 'Filing' && inv.currentStage === STAGES.FILING);
-            if (canReturnBtn) {
+            const hideReturn = inv.type === 'direct' && inv.currentStage === STAGES.BILLING;
+            if (canReturnBtn && !hideReturn) {
                 buttons += `
                     <button onclick="returnInvoice('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-sm transition inline-flex items-center space-x-1.5" title="Return to previous stage">
                         <i class="fa-solid fa-arrow-rotate-left"></i><span>Return</span>
@@ -830,6 +836,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
 
         // 2. ADD INVOICE TAB
         function renderAddInvoiceTab() {
+            const isDirect = window.appState.currentUser.role === 'Billing';
             return `
                 <div class="max-w-2xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
                     <div class="flex items-center space-x-3 mb-6 pb-4 border-b border-slate-100">
@@ -837,8 +844,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             <i class="fa-solid fa-file-circle-plus"></i>
                         </div>
                         <div>
-                            <h3 class="font-bold text-slate-900 text-base">Add New Received Invoice</h3>
-                            <p class="text-xs text-slate-500">Main Store (Alimah) &bull; Enter invoice details received at store</p>
+                            <h3 class="font-bold text-slate-900 text-base">${isDirect ? 'Add Direct-to-Billing Invoice' : 'Add New Received Invoice'}</h3>
+                            <p class="text-xs text-slate-500">${isDirect ? 'Billing (Lilian) &bull; For invoices that do not pass through Main Store, e.g. compliance. Goes straight to Filing (Vivian).' : 'Main Store (Alimah) &bull; Enter invoice details received at store'}</p>
                         </div>
                     </div>
 
@@ -860,6 +867,14 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             <div id="supplier-suggestions" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl hidden z-30 max-h-48 overflow-y-auto"></div>
                             <p class="text-[11px] text-slate-400 mt-1">If supplier does not exist, typing a new name will automatically add them to live global database upon submission.</p>
                         </div>
+                        ${isDirect ? `
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Category *</label>
+                                <input type="text" id="inv-category" required list="cat-list" autocomplete="off" placeholder="e.g. Compliance, Consultancy Services" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <datalist id="cat-list">${knownCategories().map(c => `<option value="${escapeHtml(c)}">`).join('')}</datalist>
+                                <p class="text-[11px] text-slate-400 mt-1">Pick one from the list, or type a new category. New ones are remembered for next time.</p>
+                            </div>` : ''}
+
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
@@ -877,21 +892,21 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             </div>
                         </div>
 
-                        <div>
+                        ${isDirect ? '' : `<div>
                             <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">What is missing? (only for incomplete invoices)</label>
                             <input type="text" id="inv-incomplete-note" placeholder="e.g. No delivery note attached" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-rose-400">
-                        </div>
+                        </div>`}
 
                         <div id="dup-warning" class="hidden"></div>
 
                         <div class="pt-4 border-t border-slate-100 flex flex-wrap justify-end gap-3">
                             <button type="button" onclick="switchTab('dashboard')" class="order-0 px-5 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 transition">Cancel</button>
                             <button type="submit" data-mode="submit" class="order-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20 transition">
-                                <i class="fa-solid fa-paper-plane mr-2"></i>Save & Submit to Procurement
+                                <i class="fa-solid fa-paper-plane mr-2"></i>${isDirect ? 'Save & Submit to Filing' : 'Save & Submit to Procurement'}
                             </button>
-                            <button type="submit" data-mode="incomplete" class="order-1 px-5 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold shadow-lg shadow-rose-500/20 transition">
+                            ${isDirect ? '' : `<button type="submit" data-mode="incomplete" class="order-1 px-5 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold shadow-lg shadow-rose-500/20 transition">
                                 <i class="fa-solid fa-triangle-exclamation mr-2"></i>Save as Incomplete
-                            </button>
+                            </button>`}
                         </div>
                     </form>
                 </div>
@@ -943,27 +958,28 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 <tbody class="divide-y divide-slate-100 text-sm">
                                     ${completed.map(inv => `
                                         <tr class="hover:bg-slate-50/50 transition">
-                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}</td>
+                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}${typeTag(inv)}</td>
                                             <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
                                             <td class="p-4">
                                                 <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
-                                                <div class="text-xs text-slate-400">${inv.description || 'N/A'}</div>
+                                                <div class="text-xs text-slate-400">${escapeHtml(inv.description || 'N/A')}</div>
                                             </td>
                                             <td class="p-4">
                                                 <div class="space-y-1">
                                                     ${inv.history.map(h => `
                                                         <div class="text-[11px] text-slate-600 flex items-center space-x-1.5">
                                                             <i class="fa-solid fa-circle-check text-emerald-600 text-[10px]"></i>
-                                                            <span class="font-semibold">${h.user} (${h.stage}):</span> <span>${h.action}</span>
-                                                            <span class="text-slate-400 text-[10px]">(${h.timestamp})</span>
+                                                            <span class="font-semibold">${escapeHtml(h.user)} (${escapeHtml(h.stage)}):</span> <span>${escapeHtml(h.action)}</span>
+                                                            <span class="text-slate-400 text-[10px]">(${escapeHtml(h.timestamp)})</span>
                                                         </div>
                                                     `).join('')}
                                                 </div>
                                             </td>
                                             <td class="p-4 text-right">
                                                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                                    <i class="fa-solid fa-check mr-1.5"></i>Completed & Filed
+                                                    <i class="fa-solid fa-check mr-1.5"></i>Paid & Completed
                                                 </span>
+                                                <div class="mt-2"><button onclick="openPaymentsHistory('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold">Payments</button></div>
                                             </td>
                                         </tr>
                                     `).join('')}
@@ -1125,6 +1141,10 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const invoices = window.appState.invoices;
             const inv = invoices.find(i => i.id === id);
             if (!inv) return;
+            if (inv.currentStage === STAGES.FILING || inv.currentStage === STAGES.COMPLETED) {
+                window.showToast('Invoices at Filing are completed by confirming receipt and recording payments (Payments tab).', 'warning');
+                return;
+            }
 
             let nextStage = '';
             let actionName = '';
@@ -1164,6 +1184,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     inv.currentStage = nextStage;
                     inv.stageSince = new Date().toISOString();
                     inv.returnNote = '';
+                    if (nextStage === STAGES.FILING) inv.filingStatus = '';
                     inv.history.push({
                         stage: nextStage === STAGES.COMPLETED ? STAGES.FILING : nextStage,
                         user: user.username,
@@ -1199,7 +1220,15 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             else if (inv.currentStage === STAGES.FILING) prevStage = STAGES.BILLING;
             else if (inv.currentStage === STAGES.COMPLETED) prevStage = STAGES.FILING;
             if (!prevStage) return;
+            if (inv.type === 'direct' && (prevStage === STAGES.PROCUREMENT || prevStage === STAGES.STORE)) {
+                window.showToast('Direct invoices start at Billing, so there is no earlier step to return to.', 'warning');
+                return;
+            }
 
+            if ((inv.currentStage === STAGES.FILING || inv.currentStage === STAGES.COMPLETED) && activePayments(inv).length > 0) {
+                window.showToast('This invoice has payments recorded. Reverse them first (Payments button), then return it.', 'warning');
+                return;
+            }
             const reason = prompt(`Why are you returning invoice #${inv.invoiceNumber} to ${prevStage}? (required)`, '');
             if (reason === null) return;
             if (!reason.trim()) { window.showToast('A reason is required to return an invoice.', 'warning'); return; }
@@ -1211,6 +1240,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     inv.currentStage = prevStage;
                     inv.stageSince = new Date().toISOString();
                     inv.returnNote = reason.trim();
+                    inv.filingStatus = '';
+                    inv.paidAt = '';
                     inv.history.push({
                         stage: prevStage,
                         user: user.username,
@@ -1231,7 +1262,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const user = window.appState.currentUser;
             const activeTab = window.appState.activeTab;
 
-            if (activeTab === 'add' && (user.role === 'Main Store' || user.role === 'Admin')) {
+            if (activeTab === 'add' && (user.role === 'Main Store' || user.role === 'Admin' || user.role === 'Billing')) {
                 const supplierInput = document.getElementById('inv-supplier');
                 const suggestionsBox = document.getElementById('supplier-suggestions');
 
@@ -1292,10 +1323,17 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     const amount = isNaN(amountNum) ? '' : formatMoney(amountNum, currency);
                     const description = document.getElementById('inv-desc').value.trim();
                     const asIncomplete = !!(e.submitter && e.submitter.dataset && e.submitter.dataset.mode === 'incomplete');
-                    const incompleteNote = document.getElementById('inv-incomplete-note').value.trim();
+                    const incompleteNoteEl = document.getElementById('inv-incomplete-note');
+                    const incompleteNote = incompleteNoteEl ? incompleteNoteEl.value.trim() : '';
+                    const isDirect = user.role === 'Billing';
+                    const category = isDirect ? document.getElementById('inv-category').value.trim() : '';
 
                     if (!invoiceNumber || !supplierName) {
                         window.showToast('Please fill in Invoice Number and Supplier Name.', 'error');
+                        return;
+                    }
+                    if (isDirect && !category) {
+                        window.showToast('Please choose or type a category.', 'error');
                         return;
                     }
 
@@ -1305,7 +1343,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                     let modalTitle = asIncomplete ? 'Save Incomplete Invoice' : 'Confirm New Invoice';
                     let modalMsg = asIncomplete
                         ? `Save invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" as <b>incomplete</b>? It will go to the Incomplete Invoices section, where Alimah and Sharon can submit it later.`
-                        : `Add invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" and submit to Procurement?`;
+                        : (isDirect ? `Add direct invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" (${escapeHtml(category)}) and submit it straight to <b>Filing (Vivian)</b>? It will not pass through Main Store or Procurement.` : `Add invoice #${escapeHtml(invoiceNumber)} from "${escapeHtml(supplierName)}" and submit to Procurement?`);
                     if (hasExact) {
                         modalTitle = 'Duplicate Invoice Detected';
                         modalMsg = `<span class="font-semibold text-rose-600">An invoice with the same invoice number, supplier and amount is already in the system:</span><ul class="list-disc pl-5 mt-2 mb-2 text-xs text-slate-700 space-y-1">${dups.exact.map(describeInvoice).join('')}</ul>Submitting it again could cause a double payment. Only continue if you have confirmed this is a different invoice.`;
@@ -1332,15 +1370,18 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 amountValue: isNaN(amountNum) ? null : amountNum,
                                 currency: currency,
                                 description,
-                                currentStage: asIncomplete ? STAGES.INCOMPLETE : STAGES.PROCUREMENT,
+                                type: isDirect ? 'direct' : 'standard',
+                                category: category,
+                                filingStatus: '',
+                                currentStage: isDirect ? STAGES.FILING : (asIncomplete ? STAGES.INCOMPLETE : STAGES.PROCUREMENT),
                                 stageSince: new Date().toISOString(),
                                 incompleteNote: asIncomplete ? incompleteNote : '',
                                 history: [
                                     {
-                                        stage: STAGES.STORE,
+                                        stage: isDirect ? STAGES.BILLING : STAGES.STORE,
                                         user: user.username,
                                         timestamp: `${dateReceived} (${getCurrentTimestamp()})`,
-                                        action: asIncomplete
+                                        action: isDirect ? `Created directly at Billing (${category}) & submitted to Filing` : asIncomplete
                                             ? 'Added & Marked Incomplete' + (incompleteNote ? ': ' + incompleteNote : '')
                                             : 'Added & Submitted to Procurement'
                                     }
@@ -1348,7 +1389,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             };
 
                             await window.saveInvoiceToCloud(newInvoice);
-                            window.showToast(asIncomplete ? 'Invoice saved as incomplete.' : 'Invoice added & submitted to Procurement!', asIncomplete ? 'warning' : 'success');
+                            window.showToast(asIncomplete ? 'Invoice saved as incomplete.' : (isDirect ? 'Direct invoice added & submitted to Filing!' : 'Invoice added & submitted to Procurement!'), asIncomplete ? 'warning' : 'success');
                             window.appState.activeTab = asIncomplete ? 'incomplete' : 'dashboard';
                             window.render();
                         },
@@ -1488,6 +1529,81 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             }
         };
 
+        // --- DIRECT-TO-BILLING INVOICES (e.g. compliance) ---
+        const DIRECT_CATEGORIES = ['Compliance', 'Consultancy Services', 'Other'];
+        function knownCategories() {
+            const used = window.appState.invoices.map(i => i.category).filter(Boolean);
+            return [...new Set([...DIRECT_CATEGORIES, ...used])];
+        }
+        function kindOf(inv) { return inv.type === 'direct' ? 'direct:' + (inv.category || '') : 'standard'; }
+        function kindOptions(list) {
+            const opts = [];
+            if (list.some(i => i.type !== 'direct')) opts.push({ value: 'standard', label: 'Standard (via Main Store)' });
+            const direct = list.filter(i => i.type === 'direct');
+            if (direct.length) {
+                opts.push({ value: 'direct', label: 'All direct-to-Billing' });
+                [...new Set(direct.map(i => i.category || ''))].sort().forEach(c => opts.push({ value: 'direct:' + c, label: 'Direct - ' + (c || 'no category') }));
+            }
+            return opts;
+        }
+        function matchesKind(inv, kind) {
+            if (!kind) return true;
+            if (kind === 'direct') return inv.type === 'direct';
+            return kindOf(inv) === kind;
+        }
+        function typeTag(inv) {
+            if (inv.type !== 'direct') return '';
+            return `<div class="mt-1"><span class="inline-flex px-2 py-0.5 rounded-md text-[10px] font-semibold border bg-sky-50 text-sky-700 border-sky-200">Direct${inv.category ? ' - ' + escapeHtml(inv.category) : ''}</span></div>`;
+        }
+
+        // --- PAYMENT HELPERS (Filing / Vivian) ---
+        const round2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
+        function invCurrency(inv) {
+            if (inv.currency) return inv.currency;
+            const m = String(inv.amount || '').match(/\b[A-Z]{3}\b/);
+            return m ? m[0] : 'KES';
+        }
+        function invTotal(inv) { return inv.amountValue != null ? inv.amountValue : normAmount(inv.amount); }
+        function activePayments(inv) { return (inv.payments || []).filter(p => !p.reversed); }
+        function paidSoFar(inv) { return round2(activePayments(inv).reduce((a, p) => a + (Number(p.amount) || 0), 0)); }
+        function balanceOf(inv) {
+            const t = invTotal(inv);
+            return t == null ? null : round2(Math.max(0, t - paidSoFar(inv)));
+        }
+        // 'confirm' | 'unpaid' | 'part' | 'paid' | '' (not at Filing yet)
+        function payState(inv) {
+            if (inv.currentStage === STAGES.COMPLETED) return 'paid';
+            if (inv.currentStage !== STAGES.FILING) return '';
+            if (inv.filingStatus !== 'confirmed') return 'confirm';
+            return paidSoFar(inv) > 0 ? 'part' : 'unpaid';
+        }
+        function canHandlePayments() {
+            const r = window.appState.currentUser && window.appState.currentUser.role;
+            return r === 'Filing' || r === 'Admin';
+        }
+        function payBadge(inv) {
+            const st = payState(inv);
+            if (!st || st === 'paid') return '';
+            const bal = balanceOf(inv);
+            const map = {
+                confirm: ['bg-indigo-50 text-indigo-700 border-indigo-200', 'Awaiting confirmation'],
+                unpaid: ['bg-rose-50 text-rose-700 border-rose-200', 'Unpaid'],
+                part: ['bg-amber-50 text-amber-700 border-amber-200', 'Part-paid' + (bal != null ? ' - balance ' + formatMoney(bal, invCurrency(inv)) : '')]
+            };
+            const [cls, label] = map[st];
+            return `<div class="mt-1.5"><span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border ${cls}">${escapeHtml(label)}</span></div>`;
+        }
+        function paymentExportCells(i) {
+            const st = payState(i);
+            const label = { confirm: 'Awaiting confirmation', unpaid: 'Unpaid', part: 'Part-paid', paid: 'Paid' }[st] || '';
+            if (!st) return ['', '', '', '', ''];
+            const act = activePayments(i);
+            const last = act.length ? act.map(p => p.date).sort().slice(-1)[0] : (i.paidAt || '');
+            const paidAmt = (st === 'paid' && act.length === 0) ? invTotal(i) : paidSoFar(i);
+            const bal = st === 'paid' ? 0 : balanceOf(i);
+            return [label, paidAmt, bal, last, act.map(p => p.reference).filter(Boolean).join(' | ')];
+        }
+
         // --- MONEY & AGEING HELPERS ---
         function formatMoney(n, cur) {
             return `${cur || 'KES'} ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1575,6 +1691,13 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 ${stageOptions.map(st => `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`).join('')}
                             </select>
                         ` : ''}
+                        ${kindOptions(scoped).length > 1 || scoped.some(i => i.type === 'direct') ? `
+                            <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Type / category</label>
+                            <select id="export-kind" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-4">
+                                <option value="">All invoices</option>
+                                ${kindOptions(scoped).map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('')}
+                            </select>` : ''}
+
 
                         <p id="export-count" class="text-xs font-semibold text-emerald-700 mb-5"></p>
 
@@ -1590,6 +1713,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
 
             const supSel = document.getElementById('export-supplier');
             const stageSel = document.getElementById('export-stage');
+            const kindSel = document.getElementById('export-kind');
             const countEl = document.getElementById('export-count');
             const goBtn = document.getElementById('export-go');
 
@@ -1597,7 +1721,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 const idx = parseInt(supSel.value, 10);
                 return {
                     supplier: idx >= 0 ? supplierNames[idx] : '',
-                    stage: stageSel ? stageSel.value : ''
+                    stage: stageSel ? stageSel.value : '',
+                    kind: kindSel ? kindSel.value : ''
                 };
             };
             const refresh = () => {
@@ -1608,6 +1733,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             };
             supSel.onchange = refresh;
             if (stageSel) stageSel.onchange = refresh;
+            if (kindSel) kindSel.onchange = refresh;
             refresh();
 
             document.getElementById('export-cancel').onclick = () => { modalContainer.innerHTML = ''; };
@@ -1628,6 +1754,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 list = list.filter(i => String(i.supplierName || '').trim().toLowerCase() === sup);
             }
             if (filters.stage) list = list.filter(i => i.currentStage === filters.stage);
+            if (filters.kind) list = list.filter(i => matchesKind(i, filters.kind));
             return list;
         }
 
@@ -1640,14 +1767,14 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 t = t.replace(/"/g, '""');
                 return /[",\n\r]/.test(t) ? '"' + t + '"' : t;
             };
-            const header = ['Invoice Number', 'Supplier', 'Amount', 'Amount (number)', 'Description', 'Current Stage', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Incomplete Note', 'Full History'];
+            const header = ['Invoice Number', 'Supplier', 'Amount', 'Amount (number)', 'Description', 'Current Stage', 'Type', 'Category', 'Date Received', 'Added By', 'Last Action', 'Last Updated By', 'Last Updated', 'Incomplete Note', 'Payment Status', 'Total Paid', 'Balance', 'Last Payment Date', 'Payment References', 'Full History'];
             const rows = list.map(i => {
                 const h = i.history || [];
                 const first = h[0] || {};
                 const last = h[h.length - 1] || {};
                 return [
-                    i.invoiceNumber, i.supplierName, i.amount, (i.amountValue != null ? i.amountValue : normAmount(i.amount)), i.description, i.currentStage,
-                    first.timestamp, first.user, last.action, last.user, last.timestamp, i.incompleteNote,
+                    i.invoiceNumber, i.supplierName, i.amount, (i.amountValue != null ? i.amountValue : normAmount(i.amount)), i.description, i.currentStage, (i.type === 'direct' ? 'Direct to Billing' : 'Standard'), (i.category || ''),
+                    first.timestamp, first.user, last.action, last.user, last.timestamp, i.incompleteNote, ...paymentExportCells(i),
                     h.map(x => `${x.stage} - ${x.user} - ${x.timestamp} - ${x.action}`).join(' | ')
                 ];
             });
@@ -1660,6 +1787,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const parts = ['majani-invoices', scope];
             if (filters.supplier) parts.push(slug(filters.supplier));
             if (filters.stage) parts.push(slug(filters.stage));
+            if (filters.kind) parts.push(slug(filters.kind.replace(':', '-')));
             parts.push(new Date().toISOString().split('T')[0]);
             a.download = parts.join('-') + '.csv';
             document.body.appendChild(a);
@@ -1748,7 +1876,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                                 <tbody class="divide-y divide-slate-100 text-sm">
                                     ${incomplete.map(inv => `
                                         <tr class="hover:bg-slate-50/50 transition">
-                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}</td>
+                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}${typeTag(inv)}</td>
                                             <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
                                             <td class="p-4">
                                                 <div class="font-semibold text-slate-800">${escapeHtml(inv.amount || 'N/A')}</div>
@@ -1782,6 +1910,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
             const inv = window.appState.invoices.find(i => i.id === id);
             if (!inv) return;
             const allowed = (user.role === 'Admin' && inv.currentStage !== STAGES.COMPLETED) ||
+                (user.role === 'Billing' && inv.type === 'direct' && inv.currentStage === STAGES.BILLING) ||
                 (user.role === 'Main Store' && (inv.currentStage === STAGES.STORE || inv.currentStage === STAGES.INCOMPLETE));
             if (!allowed) { window.showToast('You cannot edit this invoice at its current stage.', 'error'); return; }
 
@@ -1803,6 +1932,13 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                             <input id="edit-supplier" required list="edit-supplier-list" value="${escapeHtml(inv.supplierName)}" class="${field}">
                             <datalist id="edit-supplier-list">${window.appState.suppliers.map(n => `<option value="${escapeHtml(n)}">`).join('')}</datalist>
                         </div>
+                        ${inv.type === 'direct' ? `
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Category</label>
+                            <input id="edit-category" list="edit-cat-list" value="${escapeHtml(inv.category || '')}" class="${field}">
+                            <datalist id="edit-cat-list">${knownCategories().map(c => `<option value="${escapeHtml(c)}">`).join('')}</datalist>
+                        </div>` : ''}
+
                         <div>
                             <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Amount</label>
                             <div class="flex gap-2">
@@ -1836,6 +1972,8 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 const amtNum = parseFloat(document.getElementById('edit-amount').value);
                 const desc = document.getElementById('edit-desc').value.trim();
                 const noteEl = document.getElementById('edit-note');
+                const catEl = document.getElementById('edit-category');
+                const cat = catEl ? catEl.value.trim() : (inv.category || '');
                 const note = noteEl ? noteEl.value.trim() : (inv.incompleteNote || '');
                 if (!num || !sup) { window.showToast('Invoice number and supplier are required.', 'error'); return; }
                 const amountStr = isNaN(amtNum) ? '' : formatMoney(amtNum, curNew);
@@ -1846,6 +1984,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 if (amountStr !== (inv.amount || '')) changes.push(`amount ${inv.amount || 'none'} to ${amountStr || 'none'}`);
                 if (desc !== (inv.description || '')) changes.push('description');
                 if (note !== (inv.incompleteNote || '')) changes.push('missing-details note');
+                if (catEl && cat !== (inv.category || '')) changes.push(`category ${inv.category || 'none'} to ${cat}`);
                 if (changes.length === 0) { mc.innerHTML = ''; return; }
 
                 const d = window.findDuplicateInvoices(num, sup, amountStr, inv.id);
@@ -1858,6 +1997,7 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 inv.currency = curNew;
                 inv.description = desc;
                 if (noteEl) inv.incompleteNote = note;
+                if (catEl) inv.category = cat;
                 inv.history.push({
                     stage: inv.currentStage,
                     user: user.username,
@@ -1885,18 +2025,326 @@ apiKey: "AIzaSyBvAz6WKpw8_FKXzY2_7Snb6tniqCQt3Rg",
                 total++;
                 const ok = (!q || (tr.dataset.search || '').includes(q)) &&
                     (!f.supplier || tr.dataset.supplier === f.supplier) &&
-                    (!f.stage || tr.dataset.stage === f.stage);
+                    (!f.stage || tr.dataset.stage === f.stage) &&
+                    (!f.kind || f.kind === tr.dataset.kind || (f.kind === 'direct' && (tr.dataset.kind || '').startsWith('direct')));
                 tr.style.display = ok ? '' : 'none';
                 if (ok) shown++;
             });
             const c = document.getElementById('dash-count');
-            if (c) c.textContent = (q || f.supplier || f.stage) ? `Showing ${shown} of ${total}` : `${total} invoice${total === 1 ? '' : 's'}`;
+            if (c) c.textContent = (q || f.supplier || f.stage || f.kind) ? `Showing ${shown} of ${total}` : `${total} invoice${total === 1 ? '' : 's'}`;
         };
         window.setDashFilter = function() {
             const g = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
-            window.appState.dashFilter = { q: g('dash-q'), supplier: g('dash-supplier'), stage: g('dash-stage') };
+            window.appState.dashFilter = { q: g('dash-q'), supplier: g('dash-supplier'), stage: g('dash-stage'), kind: g('dash-kind') };
             window.applyDashFilter();
         };
+
+        // --- FILING: CONFIRM RECEIPT, PAYMENTS, REVERSALS ---
+        window.confirmFilingReceipt = function(id) {
+            const user = window.appState.currentUser;
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv || !canHandlePayments()) { window.showToast('Only Filing (Vivian) can confirm receipt.', 'error'); return; }
+            if (inv.currentStage !== STAGES.FILING || inv.filingStatus === 'confirmed') return;
+            window.showConfirmationModal(
+                'Confirm Invoice Received',
+                `Confirm that you have received invoice #${escapeHtml(inv.invoiceNumber)} from "${escapeHtml(inv.supplierName)}"? It will move to the <b>Unpaid</b> list.`,
+                async () => {
+                    inv.filingStatus = 'confirmed';
+                    inv.stageSince = new Date().toISOString();
+                    inv.history.push({ stage: STAGES.FILING, user: user.username, timestamp: getCurrentTimestamp(), action: 'Received & confirmed by Filing; marked Unpaid' });
+                    await window.saveInvoiceToCloud(inv);
+                    window.showToast(`Invoice #${escapeHtml(inv.invoiceNumber)} confirmed and moved to Unpaid.`);
+                    window.appState.payTab = 'unpaid';
+                    window.render();
+                },
+                'Confirm Received'
+            );
+        };
+
+        window.openPaymentModal = function(id) {
+            const user = window.appState.currentUser;
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv || !canHandlePayments()) { window.showToast('Only Filing (Vivian) can record payments.', 'error'); return; }
+            if (inv.currentStage !== STAGES.FILING || inv.filingStatus !== 'confirmed') { window.showToast('Confirm receipt of the invoice first.', 'warning'); return; }
+            const total = invTotal(inv);
+            const bal = balanceOf(inv);
+            const cur = invCurrency(inv);
+            const today = new Date().toISOString().split('T')[0];
+            const field = 'w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500';
+            const mc = document.getElementById('modal-container');
+            mc.innerHTML = `
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+                    <form id="pay-form" class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-100 space-y-4 max-h-[90vh] overflow-y-auto">
+                        <div>
+                            <h3 class="text-lg font-bold text-slate-900">Record Payment</h3>
+                            <p class="text-xs text-slate-500 mt-1">Invoice #${escapeHtml(inv.invoiceNumber)} &middot; ${escapeHtml(inv.supplierName)}</p>
+                        </div>
+                        ${total != null ? `
+                            <div class="grid grid-cols-3 gap-2 text-center text-xs">
+                                <div class="p-2 rounded-xl bg-slate-50 border"><div class="text-slate-400">Total</div><div class="font-bold text-slate-800">${escapeHtml(formatMoney(total, cur))}</div></div>
+                                <div class="p-2 rounded-xl bg-slate-50 border"><div class="text-slate-400">Paid so far</div><div class="font-bold text-emerald-700">${escapeHtml(formatMoney(paidSoFar(inv), cur))}</div></div>
+                                <div class="p-2 rounded-xl bg-slate-50 border"><div class="text-slate-400">Balance</div><div class="font-bold text-rose-700">${escapeHtml(formatMoney(bal, cur))}</div></div>
+                            </div>` : `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">This invoice has no amount on record, so the balance cannot be worked out. Tick the box below when this payment settles it in full.</p>`}
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Payment Date</label>
+                            <input type="date" id="pay-date" required max="${today}" value="${today}" class="${field}">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Amount Paid (${escapeHtml(cur)})</label>
+                            <input type="number" id="pay-amount" required min="0.01" step="0.01" value="${bal != null ? bal : ''}" class="${field}">
+                            ${total != null ? '<p class="text-[11px] text-slate-400 mt-1">Pre-filled with the full balance. Type a smaller amount for a part payment.</p>' : ''}
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Reference (optional)</label>
+                            <input type="text" id="pay-ref" placeholder="M-Pesa code, bank transfer or cheque number" class="${field}">
+                        </div>
+                        ${total == null ? `<label class="flex items-center space-x-2 text-sm text-slate-700"><input type="checkbox" id="pay-settles" class="rounded"><span>This payment settles the invoice in full</span></label>` : ''}
+                        <div class="flex justify-end space-x-3 pt-2">
+                            <button type="button" id="pay-cancel" class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+                            <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-lg shadow-emerald-600/20">Save Payment</button>
+                        </div>
+                    </form>
+                </div>`;
+            document.getElementById('pay-cancel').onclick = () => { mc.innerHTML = ''; };
+            document.getElementById('pay-form').onsubmit = async (e) => {
+                e.preventDefault();
+                const date = document.getElementById('pay-date').value;
+                const amt = round2(parseFloat(document.getElementById('pay-amount').value));
+                const ref = document.getElementById('pay-ref').value.trim();
+                const settlesBox = document.getElementById('pay-settles');
+                if (!date) { window.showToast('Enter the payment date.', 'error'); return; }
+                if (!(amt > 0)) { window.showToast('Enter an amount greater than zero.', 'error'); return; }
+                if (total != null && amt > bal + 0.004) {
+                    window.showToast(`That is more than the balance of ${formatMoney(bal, cur)}.`, 'error');
+                    return;
+                }
+                inv.payments = (inv.payments || []).concat([{
+                    id: 'PAY-' + Date.now(), date: date, amount: amt, reference: ref,
+                    by: user.username, at: new Date().toISOString()
+                }]);
+                const newBal = balanceOf(inv);
+                const settled = total != null ? newBal <= 0.004 : !!(settlesBox && settlesBox.checked);
+                inv.history.push({
+                    stage: STAGES.FILING, user: user.username, timestamp: getCurrentTimestamp(),
+                    action: `Payment recorded: ${formatMoney(amt, cur)} on ${date}` + (ref ? ` (ref ${ref})` : '') +
+                        (settled ? '. Paid in full - invoice completed' : (newBal != null ? `. Balance ${formatMoney(newBal, cur)}` : ''))
+                });
+                if (settled) {
+                    inv.currentStage = STAGES.COMPLETED;
+                    inv.stageSince = new Date().toISOString();
+                    inv.paidAt = date;
+                }
+                await window.saveInvoiceToCloud(inv);
+                mc.innerHTML = '';
+                window.showToast(settled ? `Invoice #${escapeHtml(inv.invoiceNumber)} paid in full and completed.` : 'Part payment recorded.');
+                if (settled) window.appState.payTab = 'paid';
+                window.render();
+            };
+        };
+
+        window.openPaymentsHistory = function(id) {
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv) return;
+            const cur = invCurrency(inv);
+            const total = invTotal(inv);
+            const list = inv.payments || [];
+            const legacyPaid = inv.currentStage === STAGES.COMPLETED && activePayments(inv).length === 0;
+            const canEdit = canHandlePayments();
+            const mc = document.getElementById('modal-container');
+            mc.innerHTML = `
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 border border-slate-100 max-h-[90vh] overflow-y-auto">
+                        <h3 class="text-lg font-bold text-slate-900">Payments</h3>
+                        <p class="text-xs text-slate-500 mt-1 mb-4">Invoice #${escapeHtml(inv.invoiceNumber)} &middot; ${escapeHtml(inv.supplierName)}${total != null ? ' &middot; total ' + escapeHtml(formatMoney(total, cur)) : ''}</p>
+                        <div class="flex flex-wrap gap-3 mb-4 text-xs">
+                            <span class="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">Paid: ${escapeHtml(formatMoney(legacyPaid && total != null ? total : paidSoFar(inv), cur))}</span>
+                            <span class="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 font-semibold">Balance: ${inv.currentStage === STAGES.COMPLETED ? escapeHtml(formatMoney(0, cur)) : (balanceOf(inv) != null ? escapeHtml(formatMoney(balanceOf(inv), cur)) : 'unknown')}</span>
+                        </div>
+                        ${list.length === 0 ? `<p class="text-xs text-slate-400 mb-4">${legacyPaid ? 'This invoice was completed before payment tracking started, so it has no individual payment records.' : 'No payments recorded yet.'}</p>` : `
+                            <div class="overflow-x-auto mb-4">
+                                <table class="w-full text-left text-xs">
+                                    <thead><tr class="text-slate-500 uppercase tracking-wider border-b"><th class="py-2 pr-3">Date</th><th class="py-2 pr-3">Amount</th><th class="py-2 pr-3">Reference</th><th class="py-2 pr-3">By</th><th class="py-2 pr-3">Status</th><th></th></tr></thead>
+                                    <tbody class="divide-y divide-slate-100">
+                                        ${list.map(pm => `
+                                            <tr class="${pm.reversed ? 'text-slate-400 line-through' : 'text-slate-700'}">
+                                                <td class="py-2 pr-3">${escapeHtml(pm.date)}</td>
+                                                <td class="py-2 pr-3 font-semibold">${escapeHtml(formatMoney(pm.amount, cur))}</td>
+                                                <td class="py-2 pr-3">${escapeHtml(pm.reference || '-')}</td>
+                                                <td class="py-2 pr-3">${escapeHtml(pm.by || '')}</td>
+                                                <td class="py-2 pr-3 no-underline">${pm.reversed ? `<span class="text-rose-600 not-italic" style="text-decoration:none;display:inline-block">Reversed: ${escapeHtml(pm.reverseReason || '')}</span>` : 'Active'}</td>
+                                                <td class="py-2 text-right">${canEdit && !pm.reversed ? `<button type="button" onclick="reversePayment('${inv.id}', '${pm.id}')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold">Reverse</button>` : ''}</td>
+                                            </tr>`).join('')}
+                                    </tbody>
+                                </table>
+                            </div>`}
+                        <div class="flex flex-wrap justify-end gap-3">
+                            ${canEdit && legacyPaid ? `<button type="button" onclick="reopenAsUnpaid('${inv.id}')" class="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold">Move back to Unpaid</button>` : ''}
+                            ${canEdit && inv.currentStage === STAGES.FILING && inv.filingStatus === 'confirmed' ? `<button type="button" onclick="openPaymentModal('${inv.id}')" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold">Record Payment</button>` : ''}
+                            <button type="button" id="pay-close" class="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50">Close</button>
+                        </div>
+                    </div>
+                </div>`;
+            document.getElementById('pay-close').onclick = () => { mc.innerHTML = ''; };
+        };
+
+        window.reversePayment = function(id, payId) {
+            const user = window.appState.currentUser;
+            if (!canHandlePayments()) { window.showToast('Only Filing (Vivian) or Admin can reverse a payment.', 'error'); return; }
+            const inv = window.appState.invoices.find(i => i.id === id);
+            const pm = inv && (inv.payments || []).find(x => x.id === payId);
+            if (!inv || !pm || pm.reversed) return;
+            const cur = invCurrency(inv);
+            const reason = prompt(`Why is the payment of ${formatMoney(pm.amount, cur)} (${pm.date}) being reversed? (required)`, '');
+            if (reason === null) return;
+            if (!reason.trim()) { window.showToast('A reason is required to reverse a payment.', 'warning'); return; }
+            window.showConfirmationModal(
+                'Reverse Payment',
+                `Reverse the payment of <b>${escapeHtml(formatMoney(pm.amount, cur))}</b> on ${escapeHtml(pm.date)} for invoice #${escapeHtml(inv.invoiceNumber)}?<br><span class="text-xs text-slate-500">Reason: ${escapeHtml(reason.trim())}</span>`,
+                async () => {
+                    pm.reversed = true;
+                    pm.reversedBy = user.username;
+                    pm.reversedAt = new Date().toISOString();
+                    pm.reverseReason = reason.trim();
+                    const wasComplete = inv.currentStage === STAGES.COMPLETED;
+                    if (wasComplete) {
+                        inv.currentStage = STAGES.FILING;
+                        inv.filingStatus = 'confirmed';
+                        inv.stageSince = new Date().toISOString();
+                        inv.paidAt = '';
+                    }
+                    inv.history.push({
+                        stage: STAGES.FILING, user: user.username, timestamp: getCurrentTimestamp(),
+                        action: `Payment reversed: ${formatMoney(pm.amount, cur)} on ${pm.date}` + (pm.reference ? ` (ref ${pm.reference})` : '') + ` - ${reason.trim()}` + (wasComplete ? '. Invoice moved back to Unpaid' : '')
+                    });
+                    await window.saveInvoiceToCloud(inv);
+                    document.getElementById('modal-container').innerHTML = '';
+                    window.showToast('Payment reversed.', 'warning');
+                    if (wasComplete) window.appState.payTab = 'unpaid';
+                    window.render();
+                },
+                'Reverse Payment',
+                true
+            );
+        };
+
+        window.reopenAsUnpaid = function(id) {
+            const user = window.appState.currentUser;
+            if (!canHandlePayments()) return;
+            const inv = window.appState.invoices.find(i => i.id === id);
+            if (!inv || inv.currentStage !== STAGES.COMPLETED) return;
+            const reason = prompt(`Why is invoice #${inv.invoiceNumber} being moved back to Unpaid? (required)`, '');
+            if (reason === null) return;
+            if (!reason.trim()) { window.showToast('A reason is required.', 'warning'); return; }
+            window.showConfirmationModal(
+                'Move Back to Unpaid',
+                `Move invoice #${escapeHtml(inv.invoiceNumber)} back to the <b>Unpaid</b> list?<br><span class="text-xs text-slate-500">Reason: ${escapeHtml(reason.trim())}</span>`,
+                async () => {
+                    inv.currentStage = STAGES.FILING;
+                    inv.filingStatus = 'confirmed';
+                    inv.stageSince = new Date().toISOString();
+                    inv.paidAt = '';
+                    inv.history.push({ stage: STAGES.FILING, user: user.username, timestamp: getCurrentTimestamp(), action: `Moved back to Unpaid: ${reason.trim()}` });
+                    await window.saveInvoiceToCloud(inv);
+                    document.getElementById('modal-container').innerHTML = '';
+                    window.showToast('Invoice moved back to Unpaid.', 'warning');
+                    window.appState.payTab = 'unpaid';
+                    window.render();
+                },
+                'Move to Unpaid',
+                true
+            );
+        };
+
+        window.setPayTab = function(tab) { window.appState.payTab = tab; window.render(); };
+
+        function renderPaymentsTab() {
+            const user = window.appState.currentUser;
+            if (user.role !== 'Filing' && user.role !== 'Admin') {
+                return '<div class="p-12 text-center text-slate-500 text-sm">The Payments section is for Filing (Vivian) and Admin.</div>';
+            }
+            const all = window.appState.invoices;
+            const lists = {
+                confirm: all.filter(i => payState(i) === 'confirm'),
+                unpaid: all.filter(i => ['unpaid', 'part'].includes(payState(i))),
+                paid: all.filter(i => i.currentStage === STAGES.COMPLETED)
+            };
+            lists.unpaid.sort((a, b) => (daysAtStage(b) ?? -1) - (daysAtStage(a) ?? -1));
+            lists.paid.sort((a, b) => String(b.paidAt || '').localeCompare(String(a.paidAt || '')));
+            const tab = window.appState.payTab || 'confirm';
+            const list = lists[tab] || [];
+
+            const owed = {};
+            lists.unpaid.forEach(i => { const b = balanceOf(i); if (b != null) owed[invCurrency(i)] = round2((owed[invCurrency(i)] || 0) + b); });
+            const owedText = Object.keys(owed).map(c => formatMoney(owed[c], c)).join(' + ');
+
+            const tabBtn = (key, label, count, color) => `
+                <button onclick="setPayTab('${key}')" class="px-4 py-2 rounded-xl text-sm font-semibold border transition ${tab === key ? color + ' shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}">
+                    ${label} <span class="ml-1 text-xs opacity-80">(${count})</span>
+                </button>`;
+
+            const emptyMsg = { confirm: 'Nothing waiting for confirmation. Invoices submitted by Billing appear here first.', unpaid: 'No unpaid invoices.', paid: 'No paid invoices yet.' }[tab];
+
+            return `
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="p-6 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-base">Payments</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Confirm invoices received from Billing, then record payments (full or in parts). An invoice is completed once it is paid in full.</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            ${owedText ? `<span class="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold">Still to pay: ${escapeHtml(owedText)}</span>` : ''}
+                            <button onclick="openExportDialog('all')" class="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-300 transition"><i class="fa-solid fa-file-export"></i><span>Export</span></button>
+                        </div>
+                    </div>
+                    <div class="px-6 py-4 border-b border-slate-100 flex flex-wrap gap-2">
+                        ${tabBtn('confirm', 'To Confirm', lists.confirm.length, 'bg-indigo-600 text-white border-indigo-600')}
+                        ${tabBtn('unpaid', 'Unpaid', lists.unpaid.length, 'bg-rose-600 text-white border-rose-600')}
+                        ${tabBtn('paid', 'Paid', lists.paid.length, 'bg-emerald-600 text-white border-emerald-600')}
+                    </div>
+                    ${list.length === 0 ? `<div class="p-12 text-center text-slate-400 text-sm">${emptyMsg}</div>` : `
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-slate-50/70 border-b border-slate-200 text-slate-600 text-xs uppercase tracking-wider font-semibold">
+                                        <th class="p-4">Invoice #</th>
+                                        <th class="p-4">Supplier</th>
+                                        <th class="p-4">Total</th>
+                                        <th class="p-4">Paid</th>
+                                        <th class="p-4">Balance</th>
+                                        <th class="p-4">Status</th>
+                                        <th class="p-4 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 text-sm">
+                                    ${list.map(inv => {
+                                        const cur = invCurrency(inv);
+                                        const total = invTotal(inv);
+                                        const legacyPaid = inv.currentStage === STAGES.COMPLETED && activePayments(inv).length === 0;
+                                        const paid = legacyPaid && total != null ? total : paidSoFar(inv);
+                                        const bal = inv.currentStage === STAGES.COMPLETED ? 0 : balanceOf(inv);
+                                        return `
+                                        <tr class="hover:bg-slate-50/50 transition">
+                                            <td class="p-4 font-bold text-slate-800">${escapeHtml(inv.invoiceNumber)}${typeTag(inv)}</td>
+                                            <td class="p-4 font-medium text-slate-700">${escapeHtml(inv.supplierName)}</td>
+                                            <td class="p-4 font-semibold text-slate-800">${escapeHtml(total != null ? formatMoney(total, cur) : (inv.amount || 'N/A'))}</td>
+                                            <td class="p-4 text-emerald-700 font-semibold">${tab === 'confirm' ? '-' : escapeHtml(formatMoney(paid, cur))}</td>
+                                            <td class="p-4 ${bal ? 'text-rose-700' : 'text-slate-500'} font-semibold">${tab === 'confirm' ? '-' : (bal == null ? 'unknown' : escapeHtml(formatMoney(bal, cur)))}</td>
+                                            <td class="p-4">
+                                                ${tab === 'paid' ? `<span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">Paid${inv.paidAt ? ' ' + escapeHtml(inv.paidAt) : ''}</span>` : payBadge(inv) + ageBadge(inv)}
+                                                ${inv.returnNote && tab === 'confirm' ? `<div class="text-xs text-rose-600 font-semibold mt-1">Returned: ${escapeHtml(inv.returnNote)}</div>` : ''}
+                                            </td>
+                                            <td class="p-4 text-right space-x-2">
+                                                ${tab === 'paid' ? `<button onclick="openPaymentsHistory('${inv.id}')" class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold">Payments</button>` : getRoleActionButtons(inv)}
+                                            </td>
+                                        </tr>`;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `}
+                </div>
+            `;
+        }
 
         // --- SUPPLIER EDIT / DELETE ---
         async function findSupplierDocs(name) {
